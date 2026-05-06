@@ -8,8 +8,9 @@
  *   node auth-login.js logout             — remove credentials
  *   node auth-login.js org list           — list orgs
  *   node auth-login.js org switch <id>    — switch org
- *   node auth-login.js workspaces         — list workspaces
- *   node auth-login.js workspace <id>     — switch workspace
+ *   node auth-login.js workspaces             — list workspaces
+ *   node auth-login.js workspace list         — list workspaces (alias)
+ *   node auth-login.js workspace switch <id>  — switch workspace
  *   node auth-login.js invite <email> <mode> — invite member
  *   node auth-login.js members            — list members
  *   node auth-login.js whoami             — show current user/org
@@ -67,6 +68,20 @@ export async function runAuthCommand(args: string[]): Promise<void> {
         if (!match) { console.log(`Org not found: ${target}`); process.exit(1); }
         await switchOrg(match.id, match.name);
         console.log(`Switched to org: ${match.name}`);
+
+        // Carry-over guard: the previous workspaceId may not exist in the new
+        // org. If it doesn't, reset to "default" so subsequent commands don't
+        // silently target a non-existent workspace.
+        const prevWs = creds.workspaceId ?? "default";
+        const wsList = await listWorkspaces(creds.token, apiUrl, match.id);
+        const stillThere = wsList.some(w => w.id === prevWs || w.name.toLowerCase() === prevWs.toLowerCase());
+        if (!stillThere) {
+          await switchWorkspace("default");
+          console.log(`Workspace '${prevWs}' is not in org '${match.name}'. Reset workspace to 'default'.`);
+          if (wsList.length > 0) {
+            console.log(`Available workspaces: ${wsList.map(w => w.name || w.id).join(", ")}`);
+          }
+        }
       } else {
         console.log("Usage: org list | org switch <name-or-id>");
       }
@@ -82,11 +97,33 @@ export async function runAuthCommand(args: string[]): Promise<void> {
 
     case "workspace": {
       if (!creds) { console.log("Not logged in."); process.exit(1); }
-      const wsId = args[1];
-      if (!wsId) { console.log("Usage: workspace <id>"); process.exit(1); }
-      await switchWorkspace(wsId);
-      console.log(`Switched to workspace: ${wsId}`);
-      break;
+      const sub = args[1];
+
+      if (sub === "list") {
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        wsList.forEach(w => console.log(`${w.id}  ${w.name}`));
+        break;
+      }
+
+      if (sub === "switch") {
+        const target = args[2];
+        if (!target) { console.log("Usage: workspace switch <name-or-id>"); process.exit(1); }
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        const match = wsList.find(w => w.id === target || w.name.toLowerCase() === target.toLowerCase());
+        if (!match) {
+          console.log(`Workspace not found: ${target}`);
+          if (wsList.length > 0) {
+            console.log(`Available workspaces: ${wsList.map(w => w.name || w.id).join(", ")}`);
+          }
+          process.exit(1);
+        }
+        await switchWorkspace(match.id);
+        console.log(`Switched to workspace: ${match.name || match.id}`);
+        break;
+      }
+
+      console.log("Usage: workspace list | workspace switch <name-or-id>");
+      process.exit(1);
     }
 
     case "invite": {

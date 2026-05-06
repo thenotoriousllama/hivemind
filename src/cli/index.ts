@@ -64,7 +64,8 @@ Account / org / workspace:
   hivemind org list                        List organizations.
   hivemind org switch <name-or-id>         Switch active organization.
   hivemind workspaces                      List workspaces in current org.
-  hivemind workspace <id>                  Switch active workspace.
+  hivemind workspace list                  List workspaces (alias of 'workspaces').
+  hivemind workspace switch <name-or-id>   Switch active workspace.
   hivemind members                         List org members.
   hivemind invite <email> <ADMIN|WRITE|READ>  Invite a teammate.
   hivemind remove <user-id>                Remove a member.
