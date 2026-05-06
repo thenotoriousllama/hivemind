@@ -83,6 +83,14 @@ vi.mock("../../src/cli/version.js", () => ({
 vi.mock("../../src/cli/update.js", () => ({
   runUpdate: (...a: unknown[]) => runUpdateMock(...a),
 }));
+const enableEmbeddingsMock = vi.fn();
+const disableEmbeddingsMock = vi.fn();
+const statusEmbeddingsMock = vi.fn();
+vi.mock("../../src/cli/embeddings.js", () => ({
+  enableEmbeddings: (...a: unknown[]) => enableEmbeddingsMock(...a),
+  disableEmbeddings: (...a: unknown[]) => disableEmbeddingsMock(...a),
+  statusEmbeddings: (...a: unknown[]) => statusEmbeddingsMock(...a),
+}));
 
 const originalArgv = process.argv;
 
@@ -96,6 +104,9 @@ beforeEach(() => {
   allPlatformIdsMock.mockReset().mockReturnValue(["claude", "codex", "claw", "cursor", "hermes", "pi"]);
   getVersionMock.mockReset().mockReturnValue("1.2.3");
   runUpdateMock.mockReset().mockResolvedValue(0);
+  enableEmbeddingsMock.mockReset();
+  disableEmbeddingsMock.mockReset();
+  statusEmbeddingsMock.mockReset();
   stdoutMock.mockReset();
   stderrMock.mockReset();
   exitSpy.mockReset();
@@ -321,6 +332,60 @@ describe("hivemind update", () => {
     runUpdateMock.mockResolvedValueOnce(1);
     await runCli(["update"]);
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("hivemind embeddings", () => {
+  it.each([["install"], ["enable"]] as const)(
+    "'embeddings %s' calls enableEmbeddings exactly once",
+    async (sub) => {
+      await runCli(["embeddings", sub]);
+      expect(enableEmbeddingsMock).toHaveBeenCalledTimes(1);
+      expect(disableEmbeddingsMock).not.toHaveBeenCalled();
+      expect(statusEmbeddingsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["uninstall"], ["disable"]] as const)(
+    "'embeddings %s' calls disableEmbeddings({ prune: false }) by default",
+    async (sub) => {
+      await runCli(["embeddings", sub]);
+      expect(disableEmbeddingsMock).toHaveBeenCalledTimes(1);
+      expect(disableEmbeddingsMock.mock.calls[0][0]).toEqual({ prune: false });
+    },
+  );
+
+  it("'embeddings uninstall --prune' passes prune: true", async () => {
+    await runCli(["embeddings", "uninstall", "--prune"]);
+    expect(disableEmbeddingsMock).toHaveBeenCalledTimes(1);
+    expect(disableEmbeddingsMock.mock.calls[0][0]).toEqual({ prune: true });
+  });
+
+  it("'embeddings status' calls statusEmbeddings once", async () => {
+    await runCli(["embeddings", "status"]);
+    expect(statusEmbeddingsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("unknown 'embeddings' subcommand exits 1 with usage warning", async () => {
+    await runCli(["embeddings", "bogus"]);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrText()).toContain("Usage: hivemind embeddings");
+    expect(enableEmbeddingsMock).not.toHaveBeenCalled();
+    expect(disableEmbeddingsMock).not.toHaveBeenCalled();
+    expect(statusEmbeddingsMock).not.toHaveBeenCalled();
+  });
+
+  it("'install --with-embeddings' enables embeddings after the install loop", async () => {
+    detectPlatformsMock.mockReturnValue([{ id: "claude", markerDir: "/x/.claude" }]);
+    await runCli(["install", "--with-embeddings"]);
+    expect(installs.installClaude).toHaveBeenCalledTimes(1);
+    expect(enableEmbeddingsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("'<platform> install --with-embeddings' enables embeddings after the per-agent install", async () => {
+    await runCli(["cursor", "install", "--with-embeddings"]);
+    expect(installs.installCursor).toHaveBeenCalledTimes(1);
+    expect(enableEmbeddingsMock).toHaveBeenCalledTimes(1);
   });
 });
 

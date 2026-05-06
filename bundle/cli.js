@@ -4672,6 +4672,12 @@ function detectInstallKind(argv1) {
     dir = parent;
   }
   installDir ??= dirname3(realArgv1);
+  if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
+    return { kind: "npx", installDir };
+  }
+  if (realArgv1.includes(`${sep}node_modules${sep}@deeplake${sep}hivemind`) || realArgv1.includes(`${sep}node_modules${sep}hivemind`)) {
+    return { kind: "npm-global", installDir };
+  }
   let gitDir = installDir;
   for (let i = 0; i < 6; i++) {
     if (existsSync12(`${gitDir}${sep}.git`)) {
@@ -4681,12 +4687,6 @@ function detectInstallKind(argv1) {
     if (parent === gitDir)
       break;
     gitDir = parent;
-  }
-  if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
-    return { kind: "npx", installDir };
-  }
-  if (realArgv1.includes(`node_modules${sep}@deeplake${sep}hivemind`) || realArgv1.includes(`node_modules${sep}hivemind`)) {
-    return { kind: "npm-global", installDir };
   }
   return { kind: "unknown", installDir };
 }
@@ -4717,15 +4717,15 @@ async function runUpdate(opts = {}) {
     return 0;
   }
   log(`Update available: ${current} \u2192 ${latest}`);
-  if (opts.dryRun) {
-    log(`(dry-run) Would run: npm install -g ${PKG_NAME}@latest`);
-    log(`(dry-run) Would re-run: hivemind install --skip-auth`);
-    return 0;
-  }
   const detected = opts.installKindOverride ?? detectInstallKind();
   const spawn = opts.spawn ?? defaultSpawn;
   switch (detected.kind) {
     case "npm-global": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would run: npm install -g ${PKG_NAME}@latest`);
+        log(`(dry-run) Would re-run: hivemind install --skip-auth`);
+        return 0;
+      }
       log(`Upgrading via npm\u2026`);
       try {
         spawn("npm", ["install", "-g", `${PKG_NAME}@latest`]);
@@ -4748,6 +4748,10 @@ async function runUpdate(opts = {}) {
       return 0;
     }
     case "npx": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would print npx-pin instructions (no persistent install to upgrade).`);
+        return 0;
+      }
       log(`You ran hivemind via npx, which does not have a persistent global install.`);
       log(`To use the new version, re-run with the explicit version pin:`);
       log(``);
@@ -4759,6 +4763,10 @@ async function runUpdate(opts = {}) {
       return 0;
     }
     case "local-dev": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: running from a local dev checkout (${detected.installDir}).`);
+        return 0;
+      }
       warn(`hivemind is running from a local development checkout (${detected.installDir}).`);
       warn(`Update via your dev workflow (git pull + npm install + npm run build),`);
       warn(`not via 'hivemind update'.`);
@@ -4766,6 +4774,10 @@ async function runUpdate(opts = {}) {
     }
     case "unknown":
     default: {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: install kind unknown (${detected.installDir}).`);
+        return 0;
+      }
       warn(`Could not determine how hivemind was installed (path: ${detected.installDir}).`);
       warn(`Update manually: npm install -g ${PKG_NAME}@latest`);
       return 1;

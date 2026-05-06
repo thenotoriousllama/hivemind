@@ -43,16 +43,23 @@ export interface DetectedInstall {
 }
 
 /**
- * Detect how the running CLI was installed by walking up from
- * the binary's real path.
+ * Detect how the running CLI was installed by walking up from the
+ * binary's real path.
  *
- * Heuristics, ordered:
- *   - Path contains `/_npx/` or `/.npx/` segment → "npx"
- *   - Path contains `node_modules/@deeplake/hivemind` AND a `.git` dir is
- *     reachable from a parent → "local-dev" (npm-link or sibling checkout)
- *   - Path contains `node_modules/@deeplake/hivemind` → "npm-global"
- *   - A package.json with our name AND a sibling .git dir → "local-dev"
- *   - Otherwise → "unknown"
+ * Heuristics, in priority order:
+ *   1. Path contains `/_npx/` or `/.npx/` segment             → "npx"
+ *   2. Path contains `node_modules/(@deeplake/)?hivemind`     → "npm-global"
+ *   3. A `.git` directory is reachable within 6 levels of the
+ *      install dir (only checked if #1 and #2 didn't fire)    → "local-dev"
+ *   4. Otherwise                                              → "unknown"
+ *
+ * Path-pattern checks (#1, #2) come BEFORE the .git probe (#3) so an
+ * npm-global install whose grandparent happens to be a git repo (dotfiles
+ * tree, nvm-installed-via-git, CI checkouts where the home dir is part of
+ * the workspace) doesn't get mis-flagged as `local-dev` and refused.
+ * Without this ordering, users with a typical `git clone` install of nvm
+ * had `~/.nvm/.git` reachable from `~/.nvm/.../node_modules/@deeplake/hivemind`
+ * and `hivemind update` would refuse with "this is a dev checkout."
  */
 export function detectInstallKind(argv1?: string): DetectedInstall {
   const realArgv1 = (() => {
@@ -60,7 +67,8 @@ export function detectInstallKind(argv1?: string): DetectedInstall {
     catch { return argv1 ?? process.argv[1] ?? fileURLToPath(import.meta.url); }
   })();
 
-  // Walk up looking for our package.json.
+  // Walk up looking for our package.json — gives us the install dir to
+  // report and to use as the .git-search root.
   let dir = dirname(realArgv1);
   let installDir: string | null = null;
   for (let i = 0; i < 10; i++) {
@@ -78,7 +86,24 @@ export function detectInstallKind(argv1?: string): DetectedInstall {
   }
   installDir ??= dirname(realArgv1);
 
-  // Local dev: .git is reachable from a parent of installDir.
+  // 1. npx-cached install (path-based — definitive).
+  if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
+    return { kind: "npx", installDir };
+  }
+
+  // 2. node_modules layout (path-based — definitive). Catches both an npm
+  // global prefix (`/usr/.../lib/node_modules/@deeplake/hivemind`) and a
+  // project-local install (`<proj>/node_modules/@deeplake/hivemind`). Both
+  // upgrade safely via `npm install -g @latest` from the user's POV.
+  if (realArgv1.includes(`${sep}node_modules${sep}@deeplake${sep}hivemind`) ||
+      realArgv1.includes(`${sep}node_modules${sep}hivemind`)) {
+    return { kind: "npm-global", installDir };
+  }
+
+  // 3. .git-reachable fallback. Only reached when path-based checks above
+  // didn't fire — i.e. install dir is NOT under any node_modules tree.
+  // That's the strong signal for a true dev checkout (`npm link` from a
+  // git clone, or `tsx src/cli/index.ts` straight from the repo).
   let gitDir = installDir;
   for (let i = 0; i < 6; i++) {
     if (existsSync(`${gitDir}${sep}.git`)) {
@@ -87,15 +112,6 @@ export function detectInstallKind(argv1?: string): DetectedInstall {
     const parent = dirname(gitDir);
     if (parent === gitDir) break;
     gitDir = parent;
-  }
-
-  if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
-    return { kind: "npx", installDir };
-  }
-
-  if (realArgv1.includes(`node_modules${sep}@deeplake${sep}hivemind`) ||
-      realArgv1.includes(`node_modules${sep}hivemind`)) {
-    return { kind: "npm-global", installDir };
   }
 
   return { kind: "unknown", installDir };
@@ -163,17 +179,16 @@ export async function runUpdate(opts: UpdateOptions = {}): Promise<number> {
 
   log(`Update available: ${current} → ${latest}`);
 
-  if (opts.dryRun) {
-    log(`(dry-run) Would run: npm install -g ${PKG_NAME}@latest`);
-    log(`(dry-run) Would re-run: hivemind install --skip-auth`);
-    return 0;
-  }
-
   const detected = opts.installKindOverride ?? detectInstallKind();
   const spawn = opts.spawn ?? defaultSpawn;
 
   switch (detected.kind) {
     case "npm-global": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would run: npm install -g ${PKG_NAME}@latest`);
+        log(`(dry-run) Would re-run: hivemind install --skip-auth`);
+        return 0;
+      }
       log(`Upgrading via npm…`);
       try {
         spawn("npm", ["install", "-g", `${PKG_NAME}@latest`]);
@@ -201,6 +216,10 @@ export async function runUpdate(opts: UpdateOptions = {}): Promise<number> {
     }
 
     case "npx": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would print npx-pin instructions (no persistent install to upgrade).`);
+        return 0;
+      }
       log(`You ran hivemind via npx, which does not have a persistent global install.`);
       log(`To use the new version, re-run with the explicit version pin:`);
       log(``);
@@ -213,6 +232,10 @@ export async function runUpdate(opts: UpdateOptions = {}): Promise<number> {
     }
 
     case "local-dev": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: running from a local dev checkout (${detected.installDir}).`);
+        return 0;
+      }
       warn(`hivemind is running from a local development checkout (${detected.installDir}).`);
       warn(`Update via your dev workflow (git pull + npm install + npm run build),`);
       warn(`not via 'hivemind update'.`);
@@ -221,6 +244,10 @@ export async function runUpdate(opts: UpdateOptions = {}): Promise<number> {
 
     case "unknown":
     default: {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: install kind unknown (${detected.installDir}).`);
+        return 0;
+      }
       warn(`Could not determine how hivemind was installed (path: ${detected.installDir}).`);
       warn(`Update manually: npm install -g ${PKG_NAME}@latest`);
       return 1;
