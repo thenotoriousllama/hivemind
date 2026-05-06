@@ -15,6 +15,7 @@ const ccHooks = [
   { entry: "dist/src/hooks/session-end.js", out: "session-end" },
   { entry: "dist/src/hooks/plugin-cache-gc.js", out: "plugin-cache-gc" },
   { entry: "dist/src/hooks/wiki-worker.js", out: "wiki-worker" },
+  { entry: "dist/src/skilify/skilify-worker.js", out: "skilify-worker" },
 ];
 
 const ccShell = [
@@ -64,6 +65,7 @@ const codexHooks = [
   { entry: "dist/src/hooks/codex/pre-tool-use.js", out: "pre-tool-use" },
   { entry: "dist/src/hooks/codex/stop.js", out: "stop" },
   { entry: "dist/src/hooks/codex/wiki-worker.js", out: "wiki-worker" },
+  { entry: "dist/src/skilify/skilify-worker.js", out: "skilify-worker" },
 ];
 
 const codexShell = [
@@ -112,6 +114,7 @@ const cursorHooks = [
   { entry: "dist/src/hooks/cursor/session-end.js", out: "session-end" },
   { entry: "dist/src/hooks/cursor/pre-tool-use.js", out: "pre-tool-use" },
   { entry: "dist/src/hooks/cursor/wiki-worker.js", out: "wiki-worker" },
+  { entry: "dist/src/skilify/skilify-worker.js", out: "skilify-worker" },
 ];
 
 // Hermes Agent shell-hook bundles (matches Claude Code's wire protocol; see
@@ -122,6 +125,7 @@ const hermesHooks = [
   { entry: "dist/src/hooks/hermes/session-end.js", out: "session-end" },
   { entry: "dist/src/hooks/hermes/pre-tool-use.js", out: "pre-tool-use" },
   { entry: "dist/src/hooks/hermes/wiki-worker.js", out: "wiki-worker" },
+  { entry: "dist/src/skilify/skilify-worker.js", out: "skilify-worker" },
 ];
 
 const cursorShell = [

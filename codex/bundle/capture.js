@@ -97,6 +97,7 @@ function loadConfig() {
     apiUrl: process.env.HIVEMIND_API_URL ?? creds?.apiUrl ?? "https://api.deeplake.ai",
     tableName: process.env.HIVEMIND_TABLE ?? "memory",
     sessionsTableName: process.env.HIVEMIND_SESSIONS_TABLE ?? "sessions",
+    skillsTableName: process.env.HIVEMIND_SKILLS_TABLE ?? "skills",
     memoryPath: process.env.HIVEMIND_MEMORY_PATH ?? join(home, ".deeplake", "memory")
   };
 }
@@ -521,6 +522,27 @@ var DeeplakeApi = class {
     await this.ensureEmbeddingColumn(name, MESSAGE_EMBEDDING_COL);
     await this.ensureColumn(name, "agent", "TEXT NOT NULL DEFAULT ''");
     await this.ensureLookupIndex(name, "path_creation_date", `("path", "creation_date")`);
+  }
+  /**
+   * Create the skills table.
+   *
+   * One row per skill version. Workers INSERT a fresh row on every KEEP /
+   * MERGE rather than UPDATE-ing in place, so the full version history is
+   * recoverable. Uniqueness in the *current* state is by (project_key, name)
+   * — newer rows shadow older ones at read time (ORDER BY version DESC).
+   * This sidesteps the Deeplake UPDATE-coalescing quirk that bit the wiki
+   * worker.
+   */
+  async ensureSkillsTable(name) {
+    const tables = await this.listTables();
+    if (!tables.includes(name)) {
+      log2(`table "${name}" not found, creating`);
+      await this.createTableWithRetry(`CREATE TABLE IF NOT EXISTS "${name}" (id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', install TEXT NOT NULL DEFAULT 'project', source_sessions TEXT NOT NULL DEFAULT '[]', source_agent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'me', author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', trigger_text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '') USING deeplake`, name);
+      log2(`table "${name}" created`);
+      if (!tables.includes(name))
+        this._tablesCache = [...tables, name];
+    }
+    await this.ensureLookupIndex(name, "project_key_name", `("project_key", "name")`);
   }
 };
 
