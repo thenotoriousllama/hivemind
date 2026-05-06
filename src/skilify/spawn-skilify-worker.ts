@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, appendFileSync, chmodSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import type { Config } from "../config.js";
 import { utcTimestamp } from "../utils/debug.js";
@@ -54,6 +54,9 @@ export function spawnSkilifyWorker(opts: SkilifySpawnOptions): void {
   const gateBin = findAgentBin(agent as Agent);
 
   const configFile = join(tmpDir, "config.json");
+  // The config file embeds the user's Deeplake API token (full org scope).
+  // Write with mode 0o600 so other users on the same host can't read it
+  // during the worker's lifetime (typically 30-60s before cleanup).
   writeFileSync(configFile, JSON.stringify({
     apiUrl: config.apiUrl,
     token: config.token,
@@ -76,7 +79,10 @@ export function spawnSkilifyWorker(opts: SkilifySpawnOptions): void {
     hermesModel: process.env.HIVEMIND_HERMES_MODEL,
     skilifyLog: SKILIFY_LOG,
     currentSessionId,
-  }));
+  }), { mode: 0o600 });
+  // chmod again as a belt-and-suspenders against umask weirdness — some
+  // file systems / overlay setups strip mode bits on the initial create.
+  try { chmodSync(configFile, 0o600); } catch { /* best effort */ }
 
   skilifyLog(`${reason}: spawning skilify worker for project=${project} key=${projectKey}`);
 

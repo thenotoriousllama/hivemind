@@ -16,7 +16,7 @@
  * works on agents whose models don't reliably use the Write tool.
  */
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -48,9 +48,19 @@ export interface GateRunResult {
 
 /** Locate the binary for an agent. Tries `which`, then falls back to a sensible default path. */
 export function findAgentBin(agent: Agent): string {
+  // Use execFileSync (no shell) instead of execSync — `agent` is a typed
+  // string literal here so injection isn't currently possible, but
+  // hard-coding the no-shell variant prevents future callers from
+  // accidentally introducing one. The names passed to `which` are also
+  // hard-coded constants in this switch.
   const which = (name: string): string | null => {
-    try { return execSync(`which ${name} 2>/dev/null`, { encoding: "utf-8" }).trim() || null; }
-    catch { return null; }
+    try {
+      const out = execFileSync("which", [name], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return out.trim() || null;
+    } catch { return null; }
   };
   switch (agent) {
     case "claude_code":

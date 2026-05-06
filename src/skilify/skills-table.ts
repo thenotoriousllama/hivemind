@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sqlIdent } from "../utils/sql.js";
 
 /**
  * SQL to create the `skills` table. Mirror of ensureSkillsTable() in
@@ -7,8 +8,12 @@ import { randomUUID } from "node:crypto";
  * full DeeplakeApi class into the worker bundle.
  */
 export function createSkillsTableSql(tableName: string): string {
+  // sqlIdent throws on anything outside [A-Za-z_][A-Za-z0-9_]* — protects
+  // against HIVEMIND_SKILLS_TABLE config injection (a stray quote would
+  // otherwise break CREATE TABLE / CREATE INDEX startup).
+  const safe = sqlIdent(tableName);
   return (
-    `CREATE TABLE IF NOT EXISTS "${tableName}" (` +
+    `CREATE TABLE IF NOT EXISTS "${safe}" (` +
       `id TEXT NOT NULL DEFAULT '', ` +
       `name TEXT NOT NULL DEFAULT '', ` +
       `project TEXT NOT NULL DEFAULT '', ` +
@@ -72,14 +77,20 @@ function esc(s: string): string {
 
 function isMissingTableError(message: string | undefined): boolean {
   if (!message) return false;
-  return /does not exist|permission denied|relation .* does not exist|no such table/i.test(message);
+  // Match phrases that unambiguously indicate "the table itself isn't there".
+  // Notably we do NOT treat 'permission denied' as missing-table — it's a
+  // different problem (auth scope) and re-running CREATE TABLE wouldn't help.
+  // We also avoid matching the bare phrase "does not exist" anywhere in the
+  // message because that string can show up in errors about other entities
+  // (e.g. "column X does not exist").
+  return /Table does not exist|relation .* does not exist|no such table/i.test(message);
 }
 
 export async function insertSkillRow(args: InsertSkillRowArgs): Promise<void> {
   const id = args.id ?? randomUUID();
   const sourceSessionsJson = JSON.stringify(args.sourceSessions);
   const sql =
-    `INSERT INTO "${args.tableName}" (` +
+    `INSERT INTO "${sqlIdent(args.tableName)}" (` +
       `id, name, project, project_key, local_path, install, ` +
       `source_sessions, source_agent, scope, author, ` +
       `description, trigger_text, body, version, created_at, updated_at` +
