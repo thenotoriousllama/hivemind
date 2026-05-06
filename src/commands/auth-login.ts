@@ -8,8 +8,9 @@
  *   node auth-login.js logout             — remove credentials
  *   node auth-login.js org list           — list orgs
  *   node auth-login.js org switch <id>    — switch org
- *   node auth-login.js workspaces         — list workspaces
- *   node auth-login.js workspace <id>     — switch workspace
+ *   node auth-login.js workspaces             — list workspaces
+ *   node auth-login.js workspace list         — list workspaces (alias)
+ *   node auth-login.js workspace switch <id>  — switch workspace
  *   node auth-login.js invite <email> <mode> — invite member
  *   node auth-login.js members            — list members
  *   node auth-login.js whoami             — show current user/org
@@ -65,8 +66,41 @@ export async function runAuthCommand(args: string[]): Promise<void> {
         const orgs = await listOrgs(creds.token, apiUrl);
         const match = orgs.find(o => o.id === target || o.name.toLowerCase() === target.toLowerCase());
         if (!match) { console.log(`Org not found: ${target}`); process.exit(1); }
+
+        // Resolve the carry-over BEFORE mutating credentials. If listWorkspaces
+        // fails (network blip, 5xx) the exception bubbles up unchanged and the
+        // org switch never happens — re-running the command then succeeds
+        // cleanly instead of leaving credentials half-committed.
+        const prevWs = creds.workspaceId ?? "default";
+        const lcPrev = prevWs.toLowerCase();
+        const wsList = await listWorkspaces(creds.token, apiUrl, match.id);
+        // Resolve to the matched workspace OBJECT, not a boolean: `workspaceId`
+        // is supposed to be a canonical id but legacy creds (and the post-login
+        // `"default"` sentinel) can hold a name. We need the matched object so
+        // we can normalize a name-only match to the canonical id.
+        const matchedWs = wsList.find(w => w.id === prevWs || (w.name && w.name.toLowerCase() === lcPrev));
+
         await switchOrg(match.id, match.name);
         console.log(`Switched to org: ${match.name}`);
+
+        if (!matchedWs) {
+          // Suppress the reset-and-warn when prevWs is already the "default"
+          // sentinel and the new org has no workspace named/idd "default" —
+          // there's nothing to reset and the warning would be misleading.
+          if (prevWs !== "default") {
+            await switchWorkspace("default");
+            console.log(`Workspace '${prevWs}' is not in org '${match.name}'. Reset workspace to 'default'.`);
+            if (wsList.length > 0) {
+              console.log(`Available workspaces: ${wsList.map(w => w.name || w.id).join(", ")}`);
+            }
+          }
+        } else if (matchedWs.id !== prevWs) {
+          // The carried-over value matched only by display name. Persist the
+          // canonical id so subsequent commands target the workspace
+          // deterministically (an id is stable across renames; a name is not).
+          await switchWorkspace(matchedWs.id);
+          console.log(`Workspace name '${prevWs}' resolved to id '${matchedWs.id}' in org '${match.name}'.`);
+        }
       } else {
         console.log("Usage: org list | org switch <name-or-id>");
       }
@@ -76,17 +110,40 @@ export async function runAuthCommand(args: string[]): Promise<void> {
     case "workspaces": {
       if (!creds) { console.log("Not logged in."); process.exit(1); }
       const ws = await listWorkspaces(creds.token, apiUrl, creds.orgId);
-      ws.forEach(w => console.log(`${w.id}  ${w.name}`));
+      ws.forEach(w => console.log(w.name || w.id));
       break;
     }
 
     case "workspace": {
       if (!creds) { console.log("Not logged in."); process.exit(1); }
-      const wsId = args[1];
-      if (!wsId) { console.log("Usage: workspace <id>"); process.exit(1); }
-      await switchWorkspace(wsId);
-      console.log(`Switched to workspace: ${wsId}`);
-      break;
+      const sub = args[1];
+
+      if (sub === "list") {
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        wsList.forEach(w => console.log(w.name || w.id));
+        break;
+      }
+
+      if (sub === "switch") {
+        const target = args[2];
+        if (!target) { console.log("Usage: workspace switch <name-or-id>"); process.exit(1); }
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        const lcTarget = target.toLowerCase();
+        const match = wsList.find(w => w.id === target || (w.name && w.name.toLowerCase() === lcTarget));
+        if (!match) {
+          console.log(`Workspace not found: ${target}`);
+          if (wsList.length > 0) {
+            console.log(`Available workspaces: ${wsList.map(w => w.name || w.id).join(", ")}`);
+          }
+          process.exit(1);
+        }
+        await switchWorkspace(match.id);
+        console.log(`Switched to workspace: ${match.name || match.id}`);
+        break;
+      }
+
+      console.log("Usage: workspace list | workspace switch <name-or-id>");
+      process.exit(1);
     }
 
     case "invite": {

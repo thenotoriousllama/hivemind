@@ -10,6 +10,7 @@ import { runAuthCommand } from "../commands/auth-login.js";
 import { runSkilifyCommand } from "../commands/skilify.js";
 import { detectPlatforms, allPlatformIds, log, warn, type PlatformId } from "./util.js";
 import { getVersion } from "./version.js";
+import { runUpdate } from "./update.js";
 
 const AUTH_SUBCOMMANDS = new Set([
   "whoami",
@@ -46,6 +47,9 @@ Usage:
 
   hivemind login            Run device-flow login (open browser).
   hivemind status           Show which assistants are wired up.
+  hivemind update [--dry-run]
+      Check npm for a newer @deeplake/hivemind, upgrade the CLI, and refresh
+      every detected agent bundle. Single command for all agents.
 
 Semantic search (embeddings):
   hivemind embeddings install                Download @huggingface/transformers
@@ -65,7 +69,8 @@ Account / org / workspace:
   hivemind org list                        List organizations.
   hivemind org switch <name-or-id>         Switch active organization.
   hivemind workspaces                      List workspaces in current org.
-  hivemind workspace <id>                  Switch active workspace.
+  hivemind workspace list                  List workspaces (alias of 'workspaces').
+  hivemind workspace switch <name-or-id>   Switch active workspace.
   hivemind members                         List org members.
   hivemind invite <email> <ADMIN|WRITE|READ>  Invite a teammate.
   hivemind remove <user-id>                Remove a member.
@@ -194,6 +199,10 @@ async function main(): Promise<void> {
 
   if (cmd === "login") { await ensureLoggedIn(); return; }
   if (cmd === "status") { runStatus(); return; }
+  if (cmd === "update") {
+    const code = await runUpdate({ dryRun: hasFlag(args.slice(1), "--dry-run") });
+    process.exit(code);
+  }
 
   if (cmd === "skilify") {
     runSkilifyCommand(args.slice(1));

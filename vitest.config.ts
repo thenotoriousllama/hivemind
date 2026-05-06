@@ -215,6 +215,7 @@ export default defineConfig({
         "src/cli/version.ts":           { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/cli/auth.ts":              { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/cli/index.ts":             { statements: 80, branches: 80, functions: 80, lines: 80 },
+        "src/cli/update.ts":            { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/cli/install-claude.ts":    { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/cli/install-codex.ts":     { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/cli/install-cursor.ts":    { statements: 80, branches: 80, functions: 80, lines: 80 },

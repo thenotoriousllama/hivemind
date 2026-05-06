@@ -177,6 +177,7 @@ function pluginAlreadyInstalled() {
     return false;
   return r.stdout.includes(PLUGIN_KEY);
 }
+var PLUGIN_SCOPES = ["user", "project", "local", "managed"];
 function installClaude() {
   requireClaudeCli();
   if (!marketplaceAlreadyAdded()) {
@@ -190,9 +191,15 @@ function installClaude() {
     if (!inst.ok) {
       throw new Error(`Failed to install hivemind plugin: ${inst.stderr.slice(0, 200)}`);
     }
+    log(`  Claude Code    installed via marketplace ${MARKETPLACE_SOURCE}`);
+  } else {
+    runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME]);
+    for (const scope of PLUGIN_SCOPES) {
+      runClaude(["plugin", "update", PLUGIN_KEY, "--scope", scope]);
+    }
+    log(`  Claude Code    refreshed via marketplace ${MARKETPLACE_SOURCE}`);
   }
   runClaude(["plugin", "enable", PLUGIN_KEY]);
-  log(`  Claude Code    installed via marketplace ${MARKETPLACE_SOURCE}`);
 }
 function uninstallClaude() {
   try {
@@ -4534,8 +4541,24 @@ async function runAuthCommand(args) {
           console.log(`Org not found: ${target}`);
           process.exit(1);
         }
+        const prevWs = creds.workspaceId ?? "default";
+        const lcPrev = prevWs.toLowerCase();
+        const wsList = await listWorkspaces(creds.token, apiUrl, match.id);
+        const matchedWs = wsList.find((w) => w.id === prevWs || w.name && w.name.toLowerCase() === lcPrev);
         await switchOrg(match.id, match.name);
         console.log(`Switched to org: ${match.name}`);
+        if (!matchedWs) {
+          if (prevWs !== "default") {
+            await switchWorkspace("default");
+            console.log(`Workspace '${prevWs}' is not in org '${match.name}'. Reset workspace to 'default'.`);
+            if (wsList.length > 0) {
+              console.log(`Available workspaces: ${wsList.map((w) => w.name || w.id).join(", ")}`);
+            }
+          }
+        } else if (matchedWs.id !== prevWs) {
+          await switchWorkspace(matchedWs.id);
+          console.log(`Workspace name '${prevWs}' resolved to id '${matchedWs.id}' in org '${match.name}'.`);
+        }
       } else {
         console.log("Usage: org list | org switch <name-or-id>");
       }
@@ -4547,7 +4570,7 @@ async function runAuthCommand(args) {
         process.exit(1);
       }
       const ws = await listWorkspaces(creds.token, apiUrl, creds.orgId);
-      ws.forEach((w) => console.log(`${w.id}  ${w.name}`));
+      ws.forEach((w) => console.log(w.name || w.id));
       break;
     }
     case "workspace": {
@@ -4555,14 +4578,34 @@ async function runAuthCommand(args) {
         console.log("Not logged in.");
         process.exit(1);
       }
-      const wsId = args[1];
-      if (!wsId) {
-        console.log("Usage: workspace <id>");
-        process.exit(1);
+      const sub = args[1];
+      if (sub === "list") {
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        wsList.forEach((w) => console.log(w.name || w.id));
+        break;
       }
-      await switchWorkspace(wsId);
-      console.log(`Switched to workspace: ${wsId}`);
-      break;
+      if (sub === "switch") {
+        const target = args[2];
+        if (!target) {
+          console.log("Usage: workspace switch <name-or-id>");
+          process.exit(1);
+        }
+        const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
+        const lcTarget = target.toLowerCase();
+        const match = wsList.find((w) => w.id === target || w.name && w.name.toLowerCase() === lcTarget);
+        if (!match) {
+          console.log(`Workspace not found: ${target}`);
+          if (wsList.length > 0) {
+            console.log(`Available workspaces: ${wsList.map((w) => w.name || w.id).join(", ")}`);
+          }
+          process.exit(1);
+        }
+        await switchWorkspace(match.id);
+        console.log(`Switched to workspace: ${match.name || match.id}`);
+        break;
+      }
+      console.log("Usage: workspace list | workspace switch <name-or-id>");
+      process.exit(1);
     }
     case "invite": {
       if (!creds) {
@@ -5137,6 +5180,164 @@ if (process.argv[1] && process.argv[1].endsWith("skilify.js")) {
   runSkilifyCommand(process.argv.slice(2));
 }
 
+// dist/src/cli/update.js
+import { execFileSync as execFileSync4 } from "node:child_process";
+import { existsSync as existsSync16, readFileSync as readFileSync14, realpathSync } from "node:fs";
+import { dirname as dirname4, sep } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// dist/src/utils/version-check.js
+import { readFileSync as readFileSync13 } from "node:fs";
+import { dirname as dirname3, join as join19 } from "node:path";
+function isNewer(latest, current) {
+  const parse = (v) => v.split(".").map(Number);
+  const [la, lb, lc] = parse(latest);
+  const [ca, cb, cc] = parse(current);
+  return la > ca || la === ca && lb > cb || la === ca && lb === cb && lc > cc;
+}
+
+// dist/src/cli/update.js
+var NPM_REGISTRY_URL = "https://registry.npmjs.org/@deeplake/hivemind/latest";
+var PKG_NAME = "@deeplake/hivemind";
+function detectInstallKind(argv1) {
+  const realArgv1 = (() => {
+    try {
+      return realpathSync(argv1 ?? process.argv[1] ?? fileURLToPath2(import.meta.url));
+    } catch {
+      return argv1 ?? process.argv[1] ?? fileURLToPath2(import.meta.url);
+    }
+  })();
+  let dir = dirname4(realArgv1);
+  let installDir = null;
+  for (let i = 0; i < 10; i++) {
+    const pkgPath = `${dir}${sep}package.json`;
+    try {
+      const pkg = JSON.parse(readFileSync14(pkgPath, "utf-8"));
+      if (pkg.name === PKG_NAME || pkg.name === "hivemind") {
+        installDir = dir;
+        break;
+      }
+    } catch {
+    }
+    const parent = dirname4(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  installDir ??= dirname4(realArgv1);
+  if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
+    return { kind: "npx", installDir };
+  }
+  if (realArgv1.includes(`${sep}node_modules${sep}@deeplake${sep}hivemind`) || realArgv1.includes(`${sep}node_modules${sep}hivemind`)) {
+    return { kind: "npm-global", installDir };
+  }
+  let gitDir = installDir;
+  for (let i = 0; i < 6; i++) {
+    if (existsSync16(`${gitDir}${sep}.git`)) {
+      return { kind: "local-dev", installDir };
+    }
+    const parent = dirname4(gitDir);
+    if (parent === gitDir)
+      break;
+    gitDir = parent;
+  }
+  return { kind: "unknown", installDir };
+}
+async function getLatestNpmVersion(timeoutMs = 5e3) {
+  try {
+    const res = await fetch(NPM_REGISTRY_URL, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok)
+      return null;
+    const meta = await res.json();
+    return meta.version ?? null;
+  } catch {
+    return null;
+  }
+}
+var defaultSpawn = (cmd, args) => {
+  execFileSync4(cmd, args, { stdio: "inherit" });
+};
+async function runUpdate(opts = {}) {
+  const current = opts.currentVersionOverride ?? getVersion();
+  const latest = opts.latestVersionOverride !== void 0 ? opts.latestVersionOverride : await getLatestNpmVersion();
+  if (!latest) {
+    warn(`Could not reach npm registry to check for updates.`);
+    warn(`Current version: ${current}`);
+    return 1;
+  }
+  if (!isNewer(latest, current)) {
+    log(`hivemind ${current} is up to date (npm latest: ${latest}).`);
+    return 0;
+  }
+  log(`Update available: ${current} \u2192 ${latest}`);
+  const detected = opts.installKindOverride ?? detectInstallKind();
+  const spawn = opts.spawn ?? defaultSpawn;
+  switch (detected.kind) {
+    case "npm-global": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would run: npm install -g ${PKG_NAME}@latest`);
+        log(`(dry-run) Would re-run: hivemind install --skip-auth`);
+        return 0;
+      }
+      log(`Upgrading via npm\u2026`);
+      try {
+        spawn("npm", ["install", "-g", `${PKG_NAME}@latest`]);
+      } catch (e) {
+        warn(`npm install failed: ${e.message}`);
+        warn(`Try running it manually: npm install -g ${PKG_NAME}@latest`);
+        return 1;
+      }
+      log(``);
+      log(`Refreshing agent bundles\u2026`);
+      try {
+        spawn("hivemind", ["install", "--skip-auth"]);
+      } catch (e) {
+        warn(`Agent refresh failed: ${e.message}`);
+        warn(`Run manually: hivemind install`);
+        return 1;
+      }
+      log(``);
+      log(`Updated to ${latest}.`);
+      return 0;
+    }
+    case "npx": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would print npx-pin instructions (no persistent install to upgrade).`);
+        return 0;
+      }
+      log(`You ran hivemind via npx, which does not have a persistent global install.`);
+      log(`To use the new version, re-run with the explicit version pin:`);
+      log(``);
+      log(`  npx ${PKG_NAME}@${latest} install`);
+      log(``);
+      log(`Or install globally so future updates are one command:`);
+      log(``);
+      log(`  npm install -g ${PKG_NAME}@latest`);
+      return 0;
+    }
+    case "local-dev": {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: running from a local dev checkout (${detected.installDir}).`);
+        return 0;
+      }
+      warn(`hivemind is running from a local development checkout (${detected.installDir}).`);
+      warn(`Update via your dev workflow (git pull + npm install + npm run build),`);
+      warn(`not via 'hivemind update'.`);
+      return 1;
+    }
+    case "unknown":
+    default: {
+      if (opts.dryRun) {
+        log(`(dry-run) Would refuse: install kind unknown (${detected.installDir}).`);
+        return 0;
+      }
+      warn(`Could not determine how hivemind was installed (path: ${detected.installDir}).`);
+      warn(`Update manually: npm install -g ${PKG_NAME}@latest`);
+      return 1;
+    }
+  }
+}
+
 // dist/src/cli/index.js
 var AUTH_SUBCOMMANDS = /* @__PURE__ */ new Set([
   "whoami",
@@ -5172,6 +5373,9 @@ Usage:
 
   hivemind login            Run device-flow login (open browser).
   hivemind status           Show which assistants are wired up.
+  hivemind update [--dry-run]
+      Check npm for a newer @deeplake/hivemind, upgrade the CLI, and refresh
+      every detected agent bundle. Single command for all agents.
 
 Semantic search (embeddings):
   hivemind embeddings install                Download @huggingface/transformers
@@ -5191,7 +5395,8 @@ Account / org / workspace:
   hivemind org list                        List organizations.
   hivemind org switch <name-or-id>         Switch active organization.
   hivemind workspaces                      List workspaces in current org.
-  hivemind workspace <id>                  Switch active workspace.
+  hivemind workspace list                  List workspaces (alias of 'workspaces').
+  hivemind workspace switch <name-or-id>   Switch active workspace.
   hivemind members                         List org members.
   hivemind invite <email> <ADMIN|WRITE|READ>  Invite a teammate.
   hivemind remove <user-id>                Remove a member.
@@ -5328,6 +5533,10 @@ async function main() {
   if (cmd === "status") {
     runStatus();
     return;
+  }
+  if (cmd === "update") {
+    const code = await runUpdate({ dryRun: hasFlag(args.slice(1), "--dry-run") });
+    process.exit(code);
   }
   if (cmd === "skilify") {
     runSkilifyCommand(args.slice(1));
