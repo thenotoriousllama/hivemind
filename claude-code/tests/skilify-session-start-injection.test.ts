@@ -174,6 +174,71 @@ describe("Pi skilify worker (mining) wiring", () => {
   });
 });
 
+describe("OpenClaw skilify worker (mining) wiring", () => {
+  // OpenClaw mines via a separate bundled worker spawned from the agent_end
+  // hook. The worker bundle is built as a second openclaw esbuild entry
+  // landing at openclaw/dist/skilify-worker.js (sibling of index.js).
+  // install-openclaw.ts already copies the entire dist/ recursively, so
+  // no install step change is required.
+
+  it("ships openclaw/dist/skilify-worker.js after build", () => {
+    const p = resolve(BUNDLE_ROOT, "openclaw", "dist", "skilify-worker.js");
+    expect(existsSync(p)).toBe(true);
+  });
+
+  it("esbuild config registers the openclaw skilify-worker entry", () => {
+    const cfg = readFileSync(resolve(BUNDLE_ROOT, "esbuild.config.mjs"), "utf-8");
+    // The openclaw skilify-worker is a SEPARATE build call (so the main
+    // openclaw bundle's child_process stub doesn't apply, and so the chunk
+    // graph stays isolated from the gateway's split chunks).
+    expect(cfg).toMatch(/"skilify-worker":\s*"dist\/src\/skilify\/skilify-worker\.js"/);
+    expect(cfg).toMatch(/outdir:\s*"openclaw\/dist"[\s\S]{0,200}skilify-worker/);
+  });
+
+  it("openclaw/src/index.ts bypasses the child_process stub via createRequire", () => {
+    const src = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "src", "index.ts"), "utf-8");
+    // The main openclaw bundle stubs out node:child_process to drop CC dead
+    // code. createRequire(import.meta.url) is the runtime escape hatch — it
+    // is NOT intercepted by esbuild's static analysis.
+    expect(src).toMatch(/createRequire\s*\(\s*import\.meta\.url\s*\)/);
+    expect(src).toMatch(/requireFromOpenclaw\("node:child_process"\)/);
+  });
+
+  it("openclaw/src/index.ts defines spawnOpenclawSkilifyWorker and wires it into agent_end", () => {
+    const src = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "src", "index.ts"), "utf-8");
+    expect(src).toMatch(/function spawnOpenclawSkilifyWorker\b/);
+    // OPENCLAW_SKILIFY_WORKER_PATH must be a sibling of import.meta.url
+    expect(src).toMatch(/OPENCLAW_SKILIFY_WORKER_PATH\s*=\s*joinPath\(__openclaw_dirname,\s*"skilify-worker\.js"\)/);
+    // HIVEMIND_SKILIFY_WORKER=1 recursion guard set on spawn env
+    expect(src).toMatch(/HIVEMIND_SKILIFY_WORKER:\s*"1"/);
+    // agent_end hook calls it after the capture loop
+    expect(src).toMatch(/agent_end[\s\S]{0,3500}Auto-captured[\s\S]{0,500}spawnOpenclawSkilifyWorker/);
+    // install: "global" — no per-project cwd, skills land under ~/.claude/skills/
+    expect(src).toMatch(/install:\s*"global"/);
+  });
+
+  it("openclaw bundle preserves the createRequire spawn (not stubbed by esbuild)", () => {
+    const text = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "dist", "index.js"), "utf-8");
+    // After bundling, the createRequire + dynamic require call must still be there
+    expect(text).toMatch(/createRequire\(import\.meta\.url\)/);
+    expect(text).toMatch(/requireFromOpenclaw\("node:child_process"\)/);
+    // realSpawn extracted from the dynamic require — actual function at runtime
+    expect(text).toMatch(/var\s*\{\s*spawn:\s*realSpawn\s*\}\s*=\s*requireFromOpenclaw/);
+    // spawnOpenclawSkilifyWorker function present in bundle
+    expect(text).toMatch(/spawnOpenclawSkilifyWorker/);
+    // realSpawn(process.execPath, [path, configPath], ...) — the actual spawn site
+    expect(text).toMatch(/realSpawn\(process\.execPath/);
+  });
+
+  it("openclaw worker bundle embeds the same shared worker code as other agents", () => {
+    const text = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "dist", "skilify-worker.js"), "utf-8");
+    expect(text).toMatch(/process\.argv\[2\]/);
+    expect(text).toMatch(/INSERT INTO/);
+    expect(text).toMatch(/gate-runner|runGate/);
+    expect(text).toMatch(/skilifyLog/);
+  });
+});
+
 describe("hivemind CLI USAGE help advertises skilify", () => {
   // Source-of-truth scan: USAGE block in src/cli/index.ts must list skilify.
   // Bundle scan would also work but the source is canonical for help text.

@@ -57,6 +57,27 @@ import { deeplakeClientHeader } from "../../src/utils/client-header.js";
 // memory ∪ sessions, path filters, JSONB normalization, virtual /index.md).
 import { searchDeeplakeTables, buildGrepSearchOptions, compileGrepRegex, normalizeContent, type GrepMatchParams } from "../../src/shell/grep-core.js";
 import { readVirtualPathContent } from "../../src/hooks/virtual-table-query.js";
+// Resolve sibling skilify-worker.js path at runtime via import.meta.url. The
+// openclaw plugin is bundled to openclaw/dist/index.js, then installed to
+// ~/.openclaw/extensions/hivemind/dist/index.js by install-openclaw.ts. The
+// worker bundle is its sibling at the same level.
+import { fileURLToPath } from "node:url";
+import { join as joinPath, dirname as dirnamePath } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import {
+  existsSync as fsExists, mkdirSync as fsMkdir, openSync as fsOpen,
+  closeSync as fsClose, writeFileSync as fsWriteFile, constants as fsConstants,
+  readFileSync as fsReadFile,
+} from "node:fs";
+import { createHash } from "node:crypto";
+// node:child_process is stubbed in the main openclaw bundle (see esbuild.config.mjs
+// "stub-unused-child-process") to drop CC-only dead-code paths from shared
+// modules. Bypass that stub via createRequire so the real spawn() is available
+// for our worker spawn — esbuild does not statically intercept require() calls
+// returned by createRequire.
+import { createRequire } from "node:module";
+const requireFromOpenclaw = createRequire(import.meta.url);
+const { spawn: realSpawn } = requireFromOpenclaw("node:child_process") as typeof import("node:child_process");
 
 interface PluginConfig {
   autoCapture?: boolean;
@@ -272,9 +293,115 @@ async function requestAuth(): Promise<string> {
 let api: DeeplakeApi | null = null;
 let sessionsTable = "sessions";
 let memoryTable = "memory";
+let skillsTable = "skills";  // lazy-created on first INSERT by the worker
 let captureEnabled = true;
 const capturedCounts = new Map<string, number>();
 const fallbackSessionId = crypto.randomUUID();
+
+// --- Skilify worker spawn (mirror of src/skilify/spawn-skilify-worker.ts) ---
+//
+// OpenClaw can't import the shared skilify TS modules — its bundle is
+// stubbed for child_process and code-splits the gateway. Inline the spawn
+// shape here, keyed off the bundled sibling `skilify-worker.js`. Mining is
+// fired once per agent_end with a per-projectKey lock; per the assumption
+// "one openclaw session at a time", subsequent agent_ends within the same
+// session are skipped by the lock and that's fine — the worker advances
+// the watermark, so re-firing later in the same session would just SKIP
+// quickly anyway.
+
+const __openclaw_filename = fileURLToPath(import.meta.url);
+const __openclaw_dirname = dirnamePath(__openclaw_filename);
+const OPENCLAW_SKILIFY_WORKER_PATH = joinPath(__openclaw_dirname, "skilify-worker.js");
+const OPENCLAW_SKILIFY_STATE_DIR = joinPath(homedir(), ".deeplake", "state", "skilify");
+
+function deriveOpenclawProjectKey(channel: string): { key: string; project: string } {
+  const project = channel || "openclaw";
+  // sha1(channel) — same shape as deriveProjectKey in src/skilify/state.ts
+  // but anchored on the openclaw channel string instead of a filesystem cwd.
+  // Two openclaw channels with the same name (e.g. shared workspace channel)
+  // share a project_key, which is intentional: their skills cluster together.
+  const key = createHash("sha1").update(project).digest("hex").slice(0, 16);
+  return { key, project };
+}
+
+function tryAcquireOpenclawSkilifyLock(projectKey: string): boolean {
+  try {
+    fsMkdir(OPENCLAW_SKILIFY_STATE_DIR, { recursive: true });
+    const lockPath = joinPath(OPENCLAW_SKILIFY_STATE_DIR, `${projectKey}.worker.lock`);
+    const fd = fsOpen(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY);
+    fsClose(fd);
+    return true;
+  } catch { return false; }
+}
+
+interface OpenclawSpawnArgs {
+  apiUrl: string;
+  token: string;
+  orgId: string;
+  workspaceId: string;
+  userName: string;
+  channel: string;
+  sessionId: string;
+  loggerWarn?: (msg: string) => void;
+}
+
+function spawnOpenclawSkilifyWorker(a: OpenclawSpawnArgs): void {
+  if (!fsExists(OPENCLAW_SKILIFY_WORKER_PATH)) {
+    a.loggerWarn?.(`skilify worker missing at ${OPENCLAW_SKILIFY_WORKER_PATH} — reinstall openclaw plugin`);
+    return;
+  }
+  const { key: projectKey, project } = deriveOpenclawProjectKey(a.channel);
+  if (!tryAcquireOpenclawSkilifyLock(projectKey)) {
+    // A worker is already running for this project — skip (next agent_end may
+    // re-fire after the worker releases the lock, or the worker watermark
+    // advance makes the re-fire a no-op).
+    return;
+  }
+  const tmpDir = joinPath(tmpdir(), `deeplake-skilify-openclaw-${projectKey}-${Date.now()}`);
+  try { fsMkdir(tmpDir, { recursive: true, mode: 0o700 }); }
+  catch (e: any) { a.loggerWarn?.(`skilify spawn: mkdir failed: ${e?.message ?? e}`); return; }
+  const configPath = joinPath(tmpDir, "config.json");
+
+  // install: "global" — openclaw has no per-project filesystem cwd, so written
+  // SKILL.md files land under ~/.claude/skills/ (cross-agent shared dir)
+  // rather than a per-project tree that would bear no relation to the user's
+  // actual project layout.
+  const config = {
+    apiUrl: a.apiUrl,
+    token: a.token,
+    orgId: a.orgId,
+    workspaceId: a.workspaceId,
+    sessionsTable,
+    skillsTable,
+    userName: a.userName,
+    cwd: homedir(),  // sentinel — only used by worker if install=project
+    projectKey,
+    project,
+    agent: "openclaw",
+    scope: "me" as const,
+    team: [] as string[],
+    install: "global" as const,
+    tmpDir,
+    gateBin: null,  // worker's gate-runner falls back to its agent dispatch
+    cursorModel: undefined,
+    hermesProvider: undefined,
+    hermesModel: undefined,
+    skilifyLog: joinPath(homedir(), ".deeplake", "hivemind-openclaw-skilify.log"),
+    currentSessionId: a.sessionId,
+  };
+  try { fsWriteFile(configPath, JSON.stringify(config), { mode: 0o600 }); }
+  catch (e: any) { a.loggerWarn?.(`skilify spawn: config write failed: ${e?.message ?? e}`); return; }
+
+  try {
+    realSpawn(process.execPath, [OPENCLAW_SKILIFY_WORKER_PATH, configPath], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, HIVEMIND_SKILIFY_WORKER: "1", HIVEMIND_CAPTURE: "false" },
+    }).unref();
+  } catch (e: any) {
+    a.loggerWarn?.(`skilify spawn: spawn failed: ${e?.message ?? e}`);
+  }
+}
 
 /** Build session path matching CC convention: /sessions/<user>/<user>_<org>_<workspace>_<sessionId>.jsonl */
 function buildSessionPath(config: { userName: string; orgName: string; workspaceId: string }, sessionId: string): string {
@@ -323,6 +450,7 @@ async function getApi(): Promise<DeeplakeApi | null> {
 
   sessionsTable = config.sessionsTableName;
   memoryTable = config.tableName;
+  skillsTable = config.skillsTableName;
 
   // Build the api in a local variable and only commit it to the module-level
   // cache after both ensureX calls succeed. If a transient network failure
@@ -963,6 +1091,26 @@ export default definePluginEntry({
           }
 
           logger.info?.(`Auto-captured ${newMessages.length} messages`);
+
+          // Skilify: fire the worker after capture so the just-stored messages
+          // become candidates for skill mining. Lock-protected, fire-and-forget,
+          // never blocks the agent. Worker reads from the sessions table we
+          // just wrote to. Non-fatal: a spawn failure here only loses one
+          // mining attempt, never breaks capture.
+          try {
+            spawnOpenclawSkilifyWorker({
+              apiUrl: cfg.apiUrl,
+              token: cfg.token,
+              orgId: cfg.orgId,
+              workspaceId: cfg.workspaceId,
+              userName: cfg.userName,
+              channel: ev.channel || "openclaw",
+              sessionId: sid,
+              loggerWarn: (msg) => logger.error(`Skilify spawn: ${msg}`),
+            });
+          } catch (e: any) {
+            logger.error(`Skilify spawn threw: ${e?.message ?? e}`);
+          }
         } catch (err) {
           logger.error(`Auto-capture failed: ${err instanceof Error ? err.message : String(err)}`);
         }

@@ -297,6 +297,31 @@ await build({
 });
 writeFileSync("openclaw/dist/package.json", esmPackageJson);
 
+// OpenClaw skilify-worker bundle. Same shared module CC/Codex/Cursor/Hermes/Pi
+// use; openclaw spawns it from its agent_end hook to mine reusable skills out
+// of just-captured sessions. Built as a SEPARATE entry (not added to the main
+// openclaw build above) because:
+//   1. The main bundle stubs out node:child_process to drop CC-only dead code.
+//      The worker genuinely needs spawn at runtime, so it gets its own bundle
+//      with no stubs.
+//   2. The main bundle uses code splitting (chunks/), and we don't want the
+//      worker's modules entangled with the gateway's chunk graph.
+// Lands at openclaw/dist/skilify-worker.js — install-openclaw.ts already
+// copies the entire dist/ recursively, so it ships to
+// ~/.openclaw/extensions/hivemind/dist/skilify-worker.js with no other change.
+await build({
+  entryPoints: { "skilify-worker": "dist/src/skilify/skilify-worker.js" },
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  outdir: "openclaw/dist",
+  external: ["node:*"],
+  define: {
+    __HIVEMIND_VERSION__: JSON.stringify(hivemindVersion),
+  },
+});
+chmodSync("openclaw/dist/skilify-worker.js", 0o755);
+
 // Hivemind MCP server (stdio). Reused by Cline / Roo / Kilo / any MCP-aware
 // agent. Lives at ~/.hivemind/mcp/server.js after install.
 await build({
