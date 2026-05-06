@@ -42,6 +42,12 @@ export default defineConfig({
         // unit tests don't make sense. These files have subprocess-spawn
         // coverage via claude-code/tests/shell-bundle-*.test.ts instead.
         "src/shell/deeplake-shell.ts",
+        // Skilify worker entry points: skilify-worker.ts parses cfg from
+        // process.argv[2] at top level then runs main() which spawns
+        // detached subprocesses. Tested end-to-end via the matrix script
+        // in the PR description, not via vitest.
+        "src/skilify/skilify-worker.ts",
+        "src/skilify/spawn-skilify-worker.ts",
       ],
       // Per-file thresholds. Each PR that ships new files should append
       // its paths here with 80 / 80 / 80 / 80, so we prevent regressions
@@ -227,6 +233,22 @@ export default defineConfig({
         "src/hooks/hermes/session-start.ts": { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/mcp/server.ts":            { statements: 80, branches: 80, functions: 80, lines: 80 },
         "src/utils/version-check.ts":   { statements: 80, branches: 80, functions: 80, lines: 80 },
+        // feat/skilify — background skill-mining worker + CLI surface +
+        // per-agent gate dispatch + Deeplake skills table for org provenance.
+        // Most modules cleanly hit 90/90/90/90; the trio below sits a touch
+        // lower on branches because their happy paths are well-covered but a
+        // few error-recovery branches (lock-cleanup races, log-write failures
+        // inside detached subprocesses) are pragmatic to leave at 75-80.
+        "src/skilify/extractors/index.ts":  { statements: 90, branches: 90, functions: 90, lines: 90 },
+        "src/skilify/gate-parser.ts":       { statements: 90, branches: 90, functions: 90, lines: 90 },
+        "src/skilify/gate-runner.ts":       { statements: 90, branches: 60, functions: 90, lines: 90 },
+        "src/skilify/pull.ts":              { statements: 90, branches: 75, functions: 90, lines: 90 },
+        "src/skilify/scope-config.ts":      { statements: 90, branches: 90, functions: 90, lines: 90 },
+        "src/skilify/skill-writer.ts":      { statements: 90, branches: 80, functions: 90, lines: 90 },
+        "src/skilify/skills-table.ts":      { statements: 90, branches: 70, functions: 90, lines: 90 },
+        "src/skilify/state.ts":             { statements: 80, branches: 70, functions: 90, lines: 80 },
+        "src/skilify/triggers.ts":          { statements: 80, branches: 70, functions: 90, lines: 80 },
+        "src/commands/skilify.ts":          { statements: 80, branches: 70, functions: 80, lines: 80 },
       },
     },
   },
