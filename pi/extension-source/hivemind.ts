@@ -32,6 +32,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { connect } from "node:net";
 import { spawn, execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 // ---------- diagnostic logging --------------------------------------------------
 //
@@ -198,6 +199,11 @@ function tryEmbedOverSocket(text: string, kind: "document" | "query"): Promise<n
 
 const SUMMARY_STATE_DIR = join(homedir(), ".claude", "hooks", "summary-state");
 const PI_WIKI_WORKER_PATH = join(homedir(), ".pi", "agent", "hivemind", "wiki-worker.js");
+// Skilify worker installed alongside wiki-worker by `hivemind pi install`.
+// Spawned on session_shutdown to mine reusable Claude skills from the just-
+// finished session. Same shared bundle used by CC/Codex/Cursor/Hermes.
+const PI_SKILIFY_WORKER_PATH = join(homedir(), ".pi", "agent", "hivemind", "skilify-worker.js");
+const SKILIFY_STATE_DIR = join(homedir(), ".deeplake", "state", "skilify");
 
 interface SummaryState {
   lastSummaryAt: number;
@@ -389,6 +395,103 @@ function spawnWikiWorker(
     }).unref();
   } catch (e: any) {
     logHm(`spawnWikiWorker(${reason}): spawn failed: ${e?.message ?? e}`);
+  }
+}
+
+// ---------- skilify worker spawn ---------------------------------------------
+//
+// Mirror of src/skilify/spawn-skilify-worker.ts and src/skilify/triggers.ts —
+// inlined here because pi/extension-source/hivemind.ts is shipped as raw .ts
+// with zero non-builtin runtime dependencies (pi compiles + loads it at
+// extension-load time). The shared TypeScript modules under src/skilify/
+// can't be imported from this file.
+//
+// The skilify worker mines the just-finished session for reusable Claude
+// skills, gates each cluster via a model call, and writes SKILL.md files +
+// rows in the org's skills Deeplake table.
+
+/** Stable project key — sha1(cwd) truncated, mirrors src/skilify/state.ts deriveProjectKey. */
+function deriveSkilifyProjectKey(cwd: string): { key: string; project: string } {
+  const project = (cwd ?? "").split("/").pop() || "unknown";
+  // Pi's extension can't easily run `git config` synchronously here; use cwd
+  // as the signature. Two checkouts of the same repo at different paths get
+  // different project_keys, which is acceptable for pi (the other agents
+  // hash the git remote when available; pi falls back to cwd-only).
+  const key = createHash("sha1").update(cwd ?? "").digest("hex").slice(0, 16);
+  return { key, project };
+}
+
+function tryAcquireSkilifyWorkerLock(projectKey: string): boolean {
+  try {
+    mkdirSync(SKILIFY_STATE_DIR, { recursive: true });
+    const lockPath = join(SKILIFY_STATE_DIR, `${projectKey}.worker.lock`);
+    const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY);
+    closeSync(fd);
+    return true;
+  } catch { return false; }
+}
+
+function spawnPiSkilifyWorker(creds: Creds, sessionId: string, cwd: string): void {
+  if (!existsSync(PI_SKILIFY_WORKER_PATH)) {
+    logHm(`spawnPiSkilifyWorker: no worker at ${PI_SKILIFY_WORKER_PATH} — install via 'hivemind pi install' or rebuild`);
+    return;
+  }
+  const { key: projectKey, project } = deriveSkilifyProjectKey(cwd);
+
+  // Lock keyed on projectKey: a second session_shutdown for the same project
+  // while a worker is still mining must skip rather than race. The worker
+  // releases the lock when it finishes (or via stale-lock cleanup at next
+  // run — same model as the CC/Codex worker).
+  if (!tryAcquireSkilifyWorkerLock(projectKey)) {
+    logHm(`spawnPiSkilifyWorker: lock held for ${projectKey} — skipping`);
+    return;
+  }
+
+  const tmpDir = join(tmpdir(), `deeplake-skilify-${projectKey}-${Date.now()}`);
+  try { mkdirSync(tmpDir, { recursive: true, mode: 0o700 }); }
+  catch (e: any) { logHm(`spawnPiSkilifyWorker: mkdir failed: ${e?.message ?? e}`); return; }
+  const configPath = join(tmpDir, "config.json");
+
+  // Same shape the spawn-skilify-worker.ts module writes for the other agents.
+  // Defaults match scope-config.ts: scope=me, install=project, no team list.
+  // Pi-specific: no per-agent gate binary (`gateBin: null`) — the worker's
+  // gate-runner falls back to its agent dispatch which for `agent: "pi"`
+  // resolves to the `pi --print` invocation we'd want for consistency.
+  const config = {
+    apiUrl: creds.apiUrl,
+    token: creds.token,
+    orgId: creds.orgId,
+    workspaceId: creds.workspaceId,
+    sessionsTable: SESSIONS_TABLE,
+    skillsTable: process.env.HIVEMIND_SKILLS_TABLE || "skills",
+    userName: creds.userName,
+    cwd,
+    projectKey,
+    project,
+    agent: "pi",
+    scope: "me" as const,
+    team: [] as string[],
+    install: "project" as const,
+    tmpDir,
+    gateBin: findPiBin(),
+    cursorModel: process.env.HIVEMIND_CURSOR_MODEL,
+    hermesProvider: process.env.HIVEMIND_HERMES_PROVIDER,
+    hermesModel: process.env.HIVEMIND_HERMES_MODEL,
+    skilifyLog: join(homedir(), ".deeplake", "hivemind-pi-skilify.log"),
+    currentSessionId: sessionId,
+  };
+  try { writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 }); }
+  catch (e: any) { logHm(`spawnPiSkilifyWorker: config write failed: ${e?.message ?? e}`); return; }
+
+  logHm(`spawnPiSkilifyWorker: spawning ${PI_SKILIFY_WORKER_PATH} project=${project} key=${projectKey} session=${sessionId}`);
+  try {
+    spawn(process.execPath, [PI_SKILIFY_WORKER_PATH, configPath], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, HIVEMIND_SKILIFY_WORKER: "1", HIVEMIND_CAPTURE: "false" },
+    }).unref();
+  } catch (e: any) {
+    logHm(`spawnPiSkilifyWorker: spawn failed: ${e?.message ?? e}`);
   }
 }
 
@@ -814,6 +917,14 @@ export default function hivemindExtension(pi: ExtensionAPI): void {
     // Always spawn for "final" — but the lock check inside spawnWikiWorker
     // skips if a periodic worker is mid-flight. Non-fatal either way.
     spawnWikiWorker(creds, sessionId, cwd, "final");
+
+    // Also kick off the skilify worker so this session's prompt+answer
+    // pairs become candidates for reusable skills. Lock keyed on
+    // projectKey, not sessionId — multiple sessions in the same project
+    // shouldn't race the gate. Non-fatal: failure here only loses the
+    // mining for this one session, never breaks the wiki summary above.
+    try { spawnPiSkilifyWorker(creds, sessionId, cwd); }
+    catch (e: any) { logHm(`session_shutdown: skilify spawn threw: ${e?.message ?? e}`); }
   });
 
   // Module-load breadcrumb so we know the extension's default export ran at all.

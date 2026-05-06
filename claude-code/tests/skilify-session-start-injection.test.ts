@@ -121,6 +121,59 @@ describe("skilify discoverability on non-bundle agent surfaces (Pi + OpenClaw)",
   );
 });
 
+describe("Pi skilify worker (mining) wiring", () => {
+  // Pi mines via a separate bundled worker spawned from session_shutdown,
+  // installed alongside wiki-worker.js by `hivemind pi install`. These
+  // assertions catch any regression that drops the bundle entry, removes
+  // the install copy, or unwires the spawn call.
+
+  it("ships pi/bundle/skilify-worker.js after build", () => {
+    const p = resolve(BUNDLE_ROOT, "pi", "bundle", "skilify-worker.js");
+    expect(existsSync(p)).toBe(true);
+  });
+
+  it("esbuild config registers the pi skilify-worker entry", () => {
+    const cfg = readFileSync(resolve(BUNDLE_ROOT, "esbuild.config.mjs"), "utf-8");
+    // Inside the piWorker array we must list the skilify-worker entry.
+    expect(cfg).toMatch(/dist\/src\/skilify\/skilify-worker\.js[^"]*"\s*,\s*out:\s*"skilify-worker"/);
+  });
+
+  it("install-pi.ts copies pi/bundle/skilify-worker.js to ~/.pi/agent/hivemind/", () => {
+    const src = readFileSync(resolve(BUNDLE_ROOT, "src", "cli", "install-pi.ts"), "utf-8");
+    expect(src).toMatch(/SKILIFY_WORKER_PATH\s*=/);
+    // join(pkgRoot(), "pi", "bundle", "skilify-worker.js") — the source path
+    expect(src).toMatch(/"pi",\s*"bundle",\s*"skilify-worker\.js"/);
+    // copyFileSync(srcSkilifyWorker, SKILIFY_WORKER_PATH) — the install step
+    expect(src).toMatch(/copyFileSync\(srcSkilifyWorker,\s*SKILIFY_WORKER_PATH\)/);
+  });
+
+  it("pi extension defines spawnPiSkilifyWorker and wires it into session_shutdown", () => {
+    const ext = readFileSync(resolve(BUNDLE_ROOT, "pi", "extension-source", "hivemind.ts"), "utf-8");
+    // Function exists
+    expect(ext).toMatch(/function spawnPiSkilifyWorker\b/);
+    // Path const points at the right install location
+    expect(ext).toMatch(/PI_SKILIFY_WORKER_PATH\s*=\s*join\(homedir\(\),\s*"\.pi",\s*"agent",\s*"hivemind",\s*"skilify-worker\.js"\)/);
+    // Spawned with HIVEMIND_SKILIFY_WORKER=1 + HIVEMIND_CAPTURE=false (recursion guard + no echo)
+    expect(ext).toMatch(/HIVEMIND_SKILIFY_WORKER:\s*"1"/);
+    // session_shutdown handler invokes it after spawnWikiWorker
+    expect(ext).toMatch(/session_shutdown[\s\S]{0,2000}spawnWikiWorker[\s\S]{0,500}spawnPiSkilifyWorker/);
+  });
+
+  it("pi skilify worker bundle embeds the same worker code as the other agents", () => {
+    // Same shared module — guard against an accidental empty bundle by
+    // checking the canonical entry-point + module markers are present.
+    const text = readFileSync(resolve(BUNDLE_ROOT, "pi", "bundle", "skilify-worker.js"), "utf-8");
+    // The worker reads its config from process.argv[2]
+    expect(text).toMatch(/process\.argv\[2\]/);
+    // The worker writes to the skills table via INSERT (append-only design)
+    expect(text).toMatch(/INSERT INTO/);
+    // The worker pulls in the skilify gate-runner module (per-agent CLI dispatch)
+    expect(text).toMatch(/gate-runner|runGate/);
+    // Worker-specific helper that doesn't appear in unrelated bundles
+    expect(text).toMatch(/skilifyLog/);
+  });
+});
+
 describe("hivemind CLI USAGE help advertises skilify", () => {
   // Source-of-truth scan: USAGE block in src/cli/index.ts must list skilify.
   // Bundle scan would also work but the source is canonical for help text.

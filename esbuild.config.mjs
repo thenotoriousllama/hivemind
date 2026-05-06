@@ -204,13 +204,15 @@ for (const h of hermesAll) {
   chmodSync(`hermes/bundle/${h.out}.js`, 0o755);
 }
 
-// Pi (badlogic/pi-mono) — only ships a wiki-worker bundle. The pi extension
-// itself is raw .ts at pi/extension-source/hivemind.ts; we don't bundle it
-// because pi's runtime compiles + loads the .ts file directly. Embed daemon
-// reuses the canonical ~/.hivemind/embed-deps/embed-daemon.js — no per-pi
-// embed bundle needed.
+// Pi (badlogic/pi-mono) — ships a wiki-worker bundle and a skilify-worker
+// bundle. The pi extension itself is raw .ts at pi/extension-source/hivemind.ts;
+// we don't bundle it because pi's runtime compiles + loads the .ts file
+// directly. Embed daemon reuses the canonical ~/.hivemind/embed-deps/embed-daemon.js
+// — no per-pi embed bundle needed. Skilify worker is the same shared module
+// used by CC/Codex/Cursor/Hermes; pi spawns it from session_shutdown.
 const piWorker = [
   { entry: "dist/src/hooks/pi/wiki-worker.js", out: "wiki-worker" },
+  { entry: "dist/src/skilify/skilify-worker.js", out: "skilify-worker" },
 ];
 await build({
   entryPoints: Object.fromEntries(piWorker.map(h => [h.out, h.entry])),
