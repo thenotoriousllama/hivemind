@@ -27,6 +27,7 @@ import { sqlStr } from "../../utils/sql.js";
 import { readStdin } from "../../utils/stdin.js";
 import { log as _log } from "../../utils/debug.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
+import { autoUpdate } from "../shared/autoupdate.js";
 const log = (msg: string) => _log("cursor-session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -112,6 +113,12 @@ async function main(): Promise<void> {
   } else {
     log(`credentials loaded: org=${creds.orgName ?? creds.orgId}`);
   }
+
+  // Centralized autoupdate fires BEFORE the DB ensure-table calls — those
+  // can stall for tens of seconds against a slow/unreachable backend, and
+  // autoUpdate has no dependency on table state. Run it first so the user
+  // sees the upgrade notice promptly even when the API is down.
+  await autoUpdate(creds, { agent: "cursor" });
 
   const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
   if (creds?.token && captureEnabled) {

@@ -6,9 +6,7 @@
  * in the background so they don't block session startup.
  */
 
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { execSync } from "node:child_process";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { loadCredentials, saveCredentials } from "../../commands/auth.js";
 import { loadConfig } from "../../config.js";
@@ -16,11 +14,10 @@ import { DeeplakeApi } from "../../deeplake-api.js";
 import { sqlStr } from "../../utils/sql.js";
 import { readStdin } from "../../utils/stdin.js";
 import { log as _log } from "../../utils/debug.js";
-import { getInstalledVersion, getLatestVersion, isNewer } from "../../utils/version-check.js";
 import { makeWikiLogger } from "../../utils/wiki-log.js";
+import { autoUpdate } from "../shared/autoupdate.js";
 const log = (msg: string) => _log("codex-session-setup", msg);
 
-const __bundleDir = dirname(fileURLToPath(import.meta.url));
 const { log: wikiLog } = makeWikiLogger(join(homedir(), ".codex", "hooks"));
 
 /** Create a placeholder summary via direct SQL INSERT. */
@@ -83,6 +80,12 @@ async function main(): Promise<void> {
     } catch { /* non-fatal */ }
   }
 
+  // Centralized autoupdate fires BEFORE the DB ensure-table calls — those
+  // can stall for tens of seconds against a slow/unreachable backend, and
+  // autoUpdate has no dependency on table state. Run it first so the user
+  // sees the upgrade notice promptly even when the API is down.
+  await autoUpdate(creds, { agent: "codex" });
+
   // Table setup + sync — always sync, only skip placeholder when capture disabled
   const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
   if (input.session_id) {
@@ -101,46 +104,6 @@ async function main(): Promise<void> {
       log(`setup failed: ${e.message}`);
       wikiLog(`SessionSetup: failed for ${input.session_id}: ${e.message}`);
     }
-  }
-
-  // Version check + auto-update
-  const autoupdate = creds.autoupdate !== false;
-  try {
-    const current = getInstalledVersion(__bundleDir, ".codex-plugin");
-    if (current) {
-      const latest = await getLatestVersion();
-      if (latest && isNewer(latest, current)) {
-        if (autoupdate) {
-          log(`autoupdate: updating ${current} → ${latest}`);
-          try {
-            const tag = `v${latest}`;
-            if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error(`unsafe version tag: ${tag}`);
-            const findCmd = `INSTALL_DIR=""; ` +
-              `CACHE_DIR=$(find ~/.codex/plugins/cache -maxdepth 3 -name "hivemind" -type d 2>/dev/null | head -1); ` +
-              `if [ -n "$CACHE_DIR" ]; then INSTALL_DIR=$(ls -1d "$CACHE_DIR"/*/ 2>/dev/null | tail -1); ` +
-              `elif [ -d ~/.codex/hivemind ]; then INSTALL_DIR=~/.codex/hivemind; fi; ` +
-              `if [ -n "$INSTALL_DIR" ]; then ` +
-              `TMPDIR=$(mktemp -d); ` +
-              `git clone --depth 1 --branch ${tag} -q https://github.com/activeloopai/hivemind.git "$TMPDIR/hivemind" 2>/dev/null && ` +
-              `cp -r "$TMPDIR/hivemind/codex/"* "$INSTALL_DIR/" 2>/dev/null; ` +
-              `rm -rf "$TMPDIR"; fi`;
-            execSync(findCmd, { stdio: "ignore", timeout: 60_000 });
-            process.stderr.write(`Hivemind auto-updated: ${current} → ${latest}. Restart Codex to apply.\n`);
-            log(`autoupdate succeeded: ${current} → ${latest} (tag: ${tag})`);
-          } catch (e: any) {
-            process.stderr.write(`Hivemind update available: ${current} → ${latest}. Auto-update failed.\n`);
-            log(`autoupdate failed: ${e.message}`);
-          }
-        } else {
-          process.stderr.write(`Hivemind update available: ${current} → ${latest}.\n`);
-          log(`update available (autoupdate off): ${current} → ${latest}`);
-        }
-      } else {
-        log(`version up to date: ${current}`);
-      }
-    }
-  } catch (e: any) {
-    log(`version check failed: ${e.message}`);
   }
 }
 

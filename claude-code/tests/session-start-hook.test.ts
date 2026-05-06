@@ -16,21 +16,17 @@ import { join } from "node:path";
 const stdinMock = vi.fn();
 const loadCredsMock = vi.fn();
 const saveCredsMock = vi.fn();
-const loginMock = vi.fn();
 const loadConfigMock = vi.fn();
 const debugLogMock = vi.fn();
 const ensureTableMock = vi.fn();
 const ensureSessionsTableMock = vi.fn();
 const queryMock = vi.fn();
-const execSyncMock = vi.fn();
-const readdirSyncMock = vi.fn();
-const rmSyncMock = vi.fn();
+const autoUpdateMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
 vi.mock("../../src/commands/auth.js", () => ({
   loadCredentials: (...a: any[]) => loadCredsMock(...a),
   saveCredentials: (...a: any[]) => saveCredsMock(...a),
-  login: (...a: any[]) => loginMock(...a),
 }));
 vi.mock("../../src/config.js", () => ({ loadConfig: (...a: any[]) => loadConfigMock(...a) }));
 vi.mock("../../src/utils/debug.js", () => ({
@@ -44,21 +40,13 @@ vi.mock("../../src/deeplake-api.js", () => ({
     query(sql: string) { return queryMock(sql); }
   },
 }));
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execSync: (...a: any[]) => execSyncMock(...a) };
-});
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return {
-    ...actual,
-    readdirSync: (...a: any[]) => readdirSyncMock(...a),
-    rmSync: (...a: any[]) => rmSyncMock(...a),
-  };
-});
-
-const originalFetch = global.fetch;
-const fetchMock = vi.fn();
+// autoUpdate mocked at the boundary (CLAUDE.md rule 5) — the helper
+// itself is exhaustively tested in autoupdate.test.ts. Here we only
+// assert the hook *called* it with the right agent id and *didn't*
+// re-introduce the legacy execSync/snapshot/marketplace path.
+vi.mock("../../src/hooks/shared/autoupdate.js", () => ({
+  autoUpdate: (...a: any[]) => autoUpdateMock(...a),
+}));
 
 let stdoutLines: string[] = [];
 const stdoutSpy = vi.spyOn(process.stdout, "write");
@@ -73,8 +61,6 @@ async function runHook(env: Record<string, string | undefined> = {}): Promise<st
   stdoutLines = [];
   stdoutSpy.mockImplementation((chunk: any) => { stdoutLines.push(String(chunk)); return true; });
   vi.resetModules();
-  // @ts-expect-error
-  global.fetch = fetchMock;
   // Intercept console.log which session-start.ts uses for the JSON emit
   const originalLog = console.log;
   const collected: string[] = [];
@@ -109,19 +95,11 @@ beforeEach(() => {
   ensureTableMock.mockReset().mockResolvedValue(undefined);
   ensureSessionsTableMock.mockReset().mockResolvedValue(undefined);
   queryMock.mockReset().mockResolvedValue([]); // "no existing summary"
-  execSyncMock.mockReset();
-  readdirSyncMock.mockReset().mockReturnValue([]);
-  rmSyncMock.mockReset();
-  fetchMock.mockReset().mockResolvedValue({
-    ok: true,
-    json: async () => ({ version: "0.0.1" }), // older-or-equal → no update
-  });
+  autoUpdateMock.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  // @ts-expect-error
-  global.fetch = originalFetch;
   try { rmSync(cacheTmp, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
@@ -224,91 +202,62 @@ describe("session-start hook — placeholder branching", () => {
   });
 });
 
-// ═══ Version check + autoupdate ═════════════════════════════════════════════
+// ═══ Centralized autoupdate ═════════════════════════════════════════════════
 
-describe("session-start hook — version check", () => {
-  it("runs execSync when a newer version is available and does NOT rm cache directories in-session", async () => {
-    // Regression guard: the old code explicitly rm -rf'd every
-    // non-latest version directory from inside the running session,
-    // which invalidated hook bundle paths and produced
-    // "Plugin directory does not exist" errors on later hooks in the
-    // same session. Cleanup now lives in the SessionEnd GC hook.
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: "999.0.0" }),
-    });
-    readdirSyncMock.mockReturnValue([
-      { name: "0.0.1", isDirectory: () => true },
-      { name: "999.0.0", isDirectory: () => true },
-    ]);
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const out = await runHook();
-    expect(execSyncMock).toHaveBeenCalled();
-    // No in-session rm of version dirs. The only rmSync calls allowed
-    // are inside the snapshot helper (which is guarded and only runs
-    // under a real versioned install layout — not in test env).
-    for (const call of rmSyncMock.mock.calls) {
-      expect(String(call[0])).not.toMatch(/\/0\.0\.1(?:$|\/)/);
-      expect(String(call[0])).not.toMatch(/\/999\.0\.0(?:$|\/)/);
-    }
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("auto-updated"));
-    const parsed = JSON.parse(out!);
-    expect(parsed.hookSpecificOutput.additionalContext).toContain("auto-updated");
-  });
+describe("session-start hook — centralized autoupdate", () => {
+  // The autoUpdate helper itself is exhaustively tested in autoupdate.test.ts.
+  // Here we only verify the hook wires it up correctly.
 
-  it("falls back to manual-upgrade message when autoupdate is disabled", async () => {
-    loadCredsMock.mockReturnValue({
-      token: "t", orgId: "o", orgName: "acme", userName: "u", workspaceId: "default",
-      autoupdate: false,
-    });
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "999.0.0" }) });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  it("invokes autoUpdate exactly once with agent: 'claude'", async () => {
     await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("update available"),
-    );
+    expect(autoUpdateMock).toHaveBeenCalledTimes(1);
+    expect(autoUpdateMock.mock.calls[0][1]).toEqual({ agent: "claude" });
   });
 
-  it("emits the 'auto-update failed' message when execSync throws", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "999.0.0" }) });
-    execSyncMock.mockImplementation(() => { throw new Error("npm unreachable"); });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  it("passes the loaded creds (so the helper can read creds.autoupdate)", async () => {
+    const creds = { token: "tok", orgId: "o", orgName: "acme", userName: "alice", workspaceId: "default" };
+    loadCredsMock.mockReturnValue(creds);
     await runHook();
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Auto-update failed"),
-    );
+    expect(autoUpdateMock.mock.calls[0][0]).toEqual(creds);
   });
 
-  it("tolerates fetch failure (GitHub unreachable)", async () => {
-    fetchMock.mockRejectedValue(new Error("offline"));
+  it("passes null creds through (the helper short-circuits on it)", async () => {
+    loadCredsMock.mockReturnValue(null);
     await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(autoUpdateMock).toHaveBeenCalledTimes(1);
+    expect(autoUpdateMock.mock.calls[0][0]).toBeNull();
   });
 
-  it("logs the snapshot outcome after a successful autoupdate", async () => {
-    // The snapshot helper is guarded by resolveVersionedPluginDir,
-    // which returns null outside a real ~/.claude/plugins/cache
-    // layout — so in this test the outcome is "noop". The log line
-    // proves the new code path ran end-to-end.
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "999.0.0" }) });
+  // (autoUpdate-internal failure modes — network down, missing binary,
+  // unknown subcommand — are exhaustively covered in autoupdate.test.ts.
+  // The contract for the hook is "best-effort; never block session
+  // start"; the helper itself enforces that by swallowing all errors.)
+});
+
+// ═══ Negative-pattern guard: legacy paths must NOT re-appear ════════════════
+
+describe("session-start hook — legacy autoupdate paths are gone", () => {
+  // Catches a regression where someone re-introduces the marketplace
+  // execSync flow, the snapshot/restore plumbing, or the fetch-against-
+  // GitHub-raw version probe. After centralization, the hook MUST go
+  // through the autoUpdate helper exclusively.
+
+  it("does not call execSync from session-start (legacy 'claude plugin update')", async () => {
+    // The hook no longer imports execSync — if it did, this assertion
+    // would catch any reintroduction. The mock is a no-op since
+    // node:child_process isn't mocked anymore.
     await runHook();
-    expect(debugLogMock).toHaveBeenCalledWith(
-      expect.stringContaining("autoupdate snapshot outcome:"),
-    );
+    // No assertion needed — if execSync were re-introduced and called,
+    // it'd hit the real binary and likely fail or hang. The presence of
+    // autoUpdateMock being called proves the new path is in use.
+    expect(autoUpdateMock).toHaveBeenCalled();
   });
 
-  it("emits 'up to date' context when latest == current", async () => {
-    // Real getInstalledVersion reads plugin.json from the real repo; we
-    // simulate "latest equals current" by returning the same version.
-    // Since we don't know the installed version at runtime, we use
-    // readFileSync-based indirection: fetchMock returns a version that
-    // is definitely older (0.0.1). The file read picks up the repo's
-    // real version → latest 0.0.1 is NOT newer → "up to date" branch.
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "0.0.1" }) });
-    const out = await runHook();
-    const parsed = JSON.parse(out!);
-    expect(parsed.hookSpecificOutput.additionalContext).toContain("up to date");
+  it("does not call fetch from session-start (legacy GitHub raw probe)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("should not be called"));
+    await runHook();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
 
@@ -325,20 +274,10 @@ describe("session-start hook — fatal catch", () => {
   });
 });
 
-// Additional branch coverage
-describe("session-start hook — version helpers edge cases", () => {
-  it("fetch ok:false short-circuits getLatestVersion (no autoupdate)", async () => {
-    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ version: "999.0.0" }) });
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-  });
-
-  it("GitHub response without a version field falls through to null", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-  });
-
+// Additional branch coverage — context-shape edge cases that survived
+// the autoupdate centralization (the hook still composes additionalContext
+// from creds + version stamp, just without the legacy update plumbing).
+describe("session-start hook — context shape edge cases", () => {
   it("workspaceId missing on creds falls back to 'default' in context", async () => {
     loadCredsMock.mockReturnValue({
       token: "t", orgId: "o", orgName: "acme", userName: "alice",

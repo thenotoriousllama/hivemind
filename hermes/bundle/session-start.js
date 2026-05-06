@@ -587,8 +587,95 @@ function getInstalledVersion(bundleDir, pluginManifestDir) {
   return null;
 }
 
+// dist/src/hooks/shared/autoupdate.js
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+var log3 = (msg) => log("autoupdate", msg);
+var RESTART_HINT = {
+  claude: "Run /reload-plugins to apply.",
+  codex: "Restart Codex to apply.",
+  cursor: "Restart Cursor to apply.",
+  hermes: "Restart Hermes to apply.",
+  pi: "Restart pi to apply.",
+  openclaw: "Restart OpenClaw to apply."
+};
+var defaultStderr = (msg) => process.stderr.write(msg);
+var defaultSpawn = (cmd, args, timeoutMs) => new Promise((resolve) => {
+  const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => {
+    stdout += d.toString();
+  });
+  child.stderr.on("data", (d) => {
+    stderr += d.toString();
+  });
+  child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+  child.on("error", () => resolve({ stdout, stderr, code: 1 }));
+});
+async function findHivemindOnPath() {
+  try {
+    const { stdout } = await execFileAsync("which", ["hivemind"], { timeout: 2e3 });
+    const path = stdout.trim();
+    return path.length > 0 ? path : null;
+  } catch {
+    return null;
+  }
+}
+function extractUpdateSummary(combined) {
+  const lines = combined.split(/\r?\n/);
+  for (const re of [/Updated to .+\./, /Update available: .+/, /is up to date/]) {
+    const hit = lines.map((l) => l.trim()).find((l) => re.test(l));
+    if (hit)
+      return hit;
+  }
+  return null;
+}
+async function autoUpdate(creds, opts) {
+  log3(`agent=${opts.agent} entered`);
+  if (!creds?.token) {
+    log3(`agent=${opts.agent} skip: no creds.token`);
+    return;
+  }
+  if (creds.autoupdate === false) {
+    log3(`agent=${opts.agent} skip: autoupdate=false`);
+    return;
+  }
+  const stderr = opts.stderr ?? defaultStderr;
+  const timeoutMs = opts.timeoutMs ?? 9e4;
+  const binaryPath = opts.hivemindBinaryPath !== void 0 ? opts.hivemindBinaryPath : await findHivemindOnPath();
+  if (!binaryPath) {
+    log3(`agent=${opts.agent} skip: hivemind binary not on PATH`);
+    return;
+  }
+  log3(`agent=${opts.agent} binary=${binaryPath} \u2192 spawning update`);
+  const spawnFn = opts.spawn ?? defaultSpawn;
+  let result;
+  try {
+    result = await spawnFn(binaryPath, ["update"], timeoutMs);
+  } catch (e) {
+    log3(`agent=${opts.agent} spawn threw: ${e?.message ?? e}`);
+    return;
+  }
+  log3(`agent=${opts.agent} spawn done: code=${result.code} stdout=${result.stdout.length}B stderr=${result.stderr.length}B`);
+  if (result.code !== 0 && !/Update available/.test(result.stderr + result.stdout)) {
+    return;
+  }
+  const summary = extractUpdateSummary(result.stdout + "\n" + result.stderr);
+  if (!summary)
+    return;
+  if (/Updated to/.test(summary)) {
+    stderr(`\u2705 Hivemind ${summary} ${RESTART_HINT[opts.agent]}
+`);
+  } else if (/Update available/.test(summary)) {
+    stderr(`\u2B06\uFE0F Hivemind: ${summary}
+`);
+  }
+}
+
 // dist/src/hooks/hermes/session-start.js
-var log3 = (msg) => log("hermes-session-start", msg);
+var log4 = (msg) => log("hermes-session-start", msg);
 var __bundleDir = dirname2(fileURLToPath(import.meta.url));
 var AUTH_CMD = join6(__bundleDir, "commands", "auth-login.js");
 var context = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents.
@@ -625,6 +712,7 @@ async function main() {
   const cwd = input.cwd ?? process.cwd();
   const creds = loadCredentials();
   const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
+  await autoUpdate(creds, { agent: "hermes" });
   if (creds?.token && captureEnabled) {
     try {
       const config = loadConfig();
@@ -633,10 +721,10 @@ async function main() {
         await api.ensureTable();
         await api.ensureSessionsTable(config.sessionsTableName);
         await createPlaceholder(api, config.tableName, sessionId, cwd, config.userName, config.orgName, config.workspaceId);
-        log3("placeholder created");
+        log4("placeholder created");
       }
     } catch (e) {
-      log3(`placeholder failed: ${e.message}`);
+      log4(`placeholder failed: ${e.message}`);
     }
   }
   let versionNotice = "";
@@ -650,6 +738,6 @@ Not logged in to Deeplake. Run: node "${AUTH_CMD}" login${versionNotice}`;
   console.log(JSON.stringify({ context: additional }));
 }
 main().catch((e) => {
-  log3(`fatal: ${e.message}`);
+  log4(`fatal: ${e.message}`);
   process.exit(0);
 });

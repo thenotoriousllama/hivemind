@@ -8,17 +8,16 @@
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { execSync } from "node:child_process";
 import { homedir } from "node:os";
-import { loadCredentials, saveCredentials, login } from "../commands/auth.js";
+import { loadCredentials, saveCredentials } from "../commands/auth.js";
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlStr } from "../utils/sql.js";
 import { readStdin } from "../utils/stdin.js";
 import { log as _log } from "../utils/debug.js";
-import { getInstalledVersion, getLatestVersion, isNewer } from "../utils/version-check.js";
+import { getInstalledVersion } from "../utils/version-check.js";
 import { makeWikiLogger } from "../utils/wiki-log.js";
-import { resolveVersionedPluginDir, snapshotPluginDir, restoreOrCleanup } from "../utils/plugin-cache.js";
+import { autoUpdate } from "./shared/autoupdate.js";
 const log = (msg: string) => _log("session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -126,6 +125,12 @@ async function main(): Promise<void> {
     }
   }
 
+  // Centralized autoupdate fires BEFORE the DB ensure-table calls — those
+  // can stall for tens of seconds against a slow/unreachable backend, and
+  // autoUpdate has no dependency on table state. Run it first so the user
+  // sees the upgrade notice promptly even when the API is down.
+  await autoUpdate(creds, { agent: "claude" });
+
   // Ensure tables exist and (when capture is enabled) create the placeholder
   // summary via direct SQL. Tables must always be synced so queries return
   // fresh data — only the placeholder INSERT is skipped when HIVEMIND_CAPTURE=false
@@ -154,49 +159,13 @@ async function main(): Promise<void> {
     }
   }
 
-  // Version check (non-blocking — failures are silently ignored)
-  const autoupdate = creds?.autoupdate !== false; // default: true
+  // Version notice in additionalContext — informational only; the
+  // upgrade-applied signal goes to stderr from inside autoUpdate (which
+  // already fired earlier in main(), before the DB ensure-table calls).
   let updateNotice = "";
   try {
     const current = getInstalledVersion(__bundleDir, ".claude-plugin");
-    if (current) {
-      const latest = await getLatestVersion();
-      if (latest && isNewer(latest, current)) {
-        if (autoupdate) {
-          log(`autoupdate: updating ${current} → ${latest}`);
-          // Snapshot the versioned plugin dir before the installer runs so
-          // this live session keeps finding its bundle paths. Old-version
-          // cleanup is handled by the SessionEnd GC hook (keeps last 2),
-          // which is safe across concurrent sessions.
-          const resolved = resolveVersionedPluginDir(__bundleDir);
-          const handle = resolved ? snapshotPluginDir(resolved.pluginDir) : null;
-          try {
-            const scopes = ["user", "project", "local", "managed"];
-            const cmd = scopes
-              .map(s => `claude plugin update hivemind@hivemind --scope ${s} 2>/dev/null || true`)
-              .join("; ");
-            execSync(cmd, { stdio: "ignore", timeout: 60_000 });
-            const outcome = restoreOrCleanup(handle);
-            log(`autoupdate snapshot outcome: ${outcome}`);
-            updateNotice = `\n\n✅ Hivemind auto-updated: ${current} → ${latest}. Run /reload-plugins to apply.`;
-            process.stderr.write(`✅ Hivemind auto-updated: ${current} → ${latest}. Run /reload-plugins to apply.\n`);
-            log(`autoupdate succeeded: ${current} → ${latest}`);
-          } catch (e: any) {
-            restoreOrCleanup(handle);
-            updateNotice = `\n\n⬆️ Hivemind update available: ${current} → ${latest}. Auto-update failed — run /hivemind:update to upgrade manually.`;
-            process.stderr.write(`⬆️ Hivemind update available: ${current} → ${latest}. Auto-update failed — run /hivemind:update to upgrade manually.\n`);
-            log(`autoupdate failed: ${e.message}`);
-          }
-        } else {
-          updateNotice = `\n\n⬆️ Hivemind update available: ${current} → ${latest}. Run /hivemind:update to upgrade.`;
-          process.stderr.write(`⬆️ Hivemind update available: ${current} → ${latest}. Run /hivemind:update to upgrade.\n`);
-          log(`update available (autoupdate off): ${current} → ${latest}`);
-        }
-      } else {
-        log(`version up to date: ${current}`);
-        updateNotice = `\n\n✅ Hivemind v${current} (up to date)`;
-      }
-    }
+    if (current) updateNotice = `\n\n✅ Hivemind v${current}`;
   } catch (e: any) {
     log(`version check failed: ${e.message}`);
   }

@@ -9,6 +9,7 @@ const ensureTableMock = vi.fn();
 const ensureSessionsTableMock = vi.fn();
 const consoleLogMock = vi.fn();
 const getInstalledVersionMock = vi.fn();
+const autoUpdateMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: unknown[]) => stdinMock(...a) }));
 vi.mock("../../src/config.js", () => ({ loadConfig: (...a: unknown[]) => loadConfigMock(...a) }));
@@ -24,6 +25,12 @@ vi.mock("../../src/deeplake-api.js", () => ({
     ensureTable() { return ensureTableMock(); }
     ensureSessionsTable(t: string) { return ensureSessionsTableMock(t); }
   },
+}));
+// autoUpdate mocked at the boundary — exhaustively tested in
+// autoupdate.test.ts. Cursor's session-start just needs to fire it
+// once with agent: "cursor".
+vi.mock("../../src/hooks/shared/autoupdate.js", () => ({
+  autoUpdate: (...a: unknown[]) => autoUpdateMock(...a),
 }));
 
 const validConfig = {
@@ -55,6 +62,7 @@ beforeEach(() => {
   ensureSessionsTableMock.mockReset().mockResolvedValue(undefined);
   consoleLogMock.mockReset();
   getInstalledVersionMock.mockReset().mockReturnValue("0.7.0");
+  autoUpdateMock.mockReset().mockResolvedValue(undefined);
   vi.spyOn(console, "log").mockImplementation(((s: string) => { consoleLogMock(s); }) as any);
 });
 

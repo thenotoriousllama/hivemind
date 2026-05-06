@@ -20,7 +20,7 @@ const debugLogMock = vi.fn();
 const ensureTableMock = vi.fn();
 const ensureSessionsTableMock = vi.fn();
 const queryMock = vi.fn();
-const execSyncMock = vi.fn();
+const autoUpdateMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
 vi.mock("../../src/commands/auth.js", () => ({
@@ -38,13 +38,13 @@ vi.mock("../../src/deeplake-api.js", () => ({
     query(sql: string) { return queryMock(sql); }
   },
 }));
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execSync: (...a: any[]) => execSyncMock(...a) };
-});
-
-const originalFetch = global.fetch;
-const fetchMock = vi.fn();
+// autoUpdate mocked at the boundary (CLAUDE.md rule 5) — exhaustive
+// helper-internal coverage lives in autoupdate.test.ts. Here we only
+// verify the codex hook calls it with agent: "codex" and that the
+// legacy git-clone tag flow is gone.
+vi.mock("../../src/hooks/shared/autoupdate.js", () => ({
+  autoUpdate: (...a: any[]) => autoUpdateMock(...a),
+}));
 
 async function runHook(env: Record<string, string | undefined> = {}): Promise<void> {
   delete process.env.HIVEMIND_WIKI_WORKER;
@@ -54,8 +54,6 @@ async function runHook(env: Record<string, string | undefined> = {}): Promise<vo
     else process.env[k] = v;
   }
   vi.resetModules();
-  // @ts-expect-error
-  global.fetch = fetchMock;
   await import("../../src/hooks/codex/session-start-setup.js");
   await new Promise(r => setImmediate(r));
   await new Promise(r => setImmediate(r));
@@ -81,17 +79,11 @@ beforeEach(() => {
   ensureTableMock.mockReset().mockResolvedValue(undefined);
   ensureSessionsTableMock.mockReset().mockResolvedValue(undefined);
   queryMock.mockReset().mockResolvedValue([]); // placeholder SELECT → empty, INSERT will follow
-  execSyncMock.mockReset();
-  fetchMock.mockReset().mockResolvedValue({
-    ok: true,
-    json: async () => ({ version: "0.0.1" }),
-  });
+  autoUpdateMock.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  // @ts-expect-error
-  global.fetch = originalFetch;
 });
 
 describe("codex session-start-setup hook — guards", () => {
@@ -172,51 +164,36 @@ describe("codex session-start-setup hook — placeholder branching", () => {
   });
 });
 
-describe("codex session-start-setup hook — version check + autoupdate", () => {
-  it("runs the git-clone autoupdate when a newer version is available", async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: "999.0.0" }),
-    });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+describe("codex session-start-setup hook — centralized autoupdate", () => {
+  it("invokes autoUpdate exactly once with agent: 'codex'", async () => {
     await runHook();
-    expect(execSyncMock).toHaveBeenCalled();
-    // The shell pipeline builds the tag from the version — verify the
-    // safe version regex accepted it and the tag embedded.
-    expect(execSyncMock.mock.calls[0][0]).toContain("v999.0.0");
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("auto-updated"),
-    );
+    expect(autoUpdateMock).toHaveBeenCalledTimes(1);
+    expect(autoUpdateMock.mock.calls[0][1]).toEqual({ agent: "codex" });
   });
 
-  it("uses the manual-upgrade message when autoupdate is disabled", async () => {
-    loadCredsMock.mockReturnValue({
-      token: "t", orgId: "o", orgName: "acme", userName: "u",
-      autoupdate: false,
-    });
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "999.0.0" }) });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  it("passes the loaded creds (so the helper can read creds.autoupdate)", async () => {
+    const creds = { token: "tok", orgId: "o", orgName: "acme", userName: "alice" };
+    loadCredsMock.mockReturnValue(creds);
     await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("update available"),
-    );
+    // The helper sees the creds object (possibly with userName backfilled
+    // — codex' setup also writes userName before calling autoUpdate).
+    const passedCreds = autoUpdateMock.mock.calls[0][0];
+    expect(passedCreds.token).toBe("tok");
+    expect(passedCreds.orgId).toBe("o");
   });
+});
 
-  it("emits 'Auto-update failed' when execSync throws", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: "999.0.0" }) });
-    execSyncMock.mockImplementation(() => { throw new Error("git fail"); });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+describe("codex session-start-setup hook — legacy autoupdate paths are gone", () => {
+  // node:child_process.execSync can't be hot-spied (non-configurable),
+  // so we use fetch as the proxy: the legacy autoupdate flow ALWAYS
+  // started with `fetch(githubraw)`. If fetch isn't called, the legacy
+  // probe is gone, and by construction the git-clone pipeline can't
+  // fire (it was gated on the fetch result).
+  it("does not call fetch (legacy GitHub-raw version probe)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("should not be called"));
     await runHook();
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Auto-update failed"),
-    );
-  });
-
-  it("tolerates a fetch error (GitHub unreachable)", async () => {
-    fetchMock.mockRejectedValue(new Error("offline"));
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
 
@@ -231,46 +208,7 @@ describe("codex session-start-setup hook — fatal catch", () => {
   });
 });
 
-// Additional branch coverage for version helpers
-describe("codex session-start-setup hook — version helpers edge cases", () => {
-  it("fetch ok:false short-circuits getLatestVersion", async () => {
-    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ version: "999.0.0" }) });
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-  });
-
-  it("response without 'version' field falls through to null", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsafe version tags without executing git clone", async () => {
-    // The hook builds `v${latest}` and validates against /^v\d+\.\d+\.\d+$/.
-    // Feed a version that fails the regex; the inner try throws the
-    // 'unsafe version tag' guard error, which is caught and surfaces
-    // the manual-upgrade path.
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: "999.0.0-dangerous;rm -rf" }),
-    });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Auto-update failed"),
-    );
-  });
-
-  it("treats latest == current as 'up to date' (isNewer false)", async () => {
-    const pkg = JSON.parse(
-      require("node:fs").readFileSync(
-        require("node:path").join(__dirname, "..", ".claude-plugin", "plugin.json"),
-        "utf-8",
-      ),
-    );
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ version: pkg.version }) });
-    await runHook();
-    expect(execSyncMock).not.toHaveBeenCalled();
-  });
-});
+// (Version-helper edge cases — fetch failure, missing version field,
+// unsafe tag rejection, isNewer comparison — are tested at the layer
+// they belong to: src/cli/update.ts (registry fetch) and the autoupdate
+// helper itself, not in the per-agent hook.)

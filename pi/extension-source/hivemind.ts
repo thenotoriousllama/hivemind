@@ -644,6 +644,32 @@ export default function hivemindExtension(pi: ExtensionAPI): void {
     } else {
       logHm(`session_start: creds org=${creds.orgName ?? creds.orgId} ws=${creds.workspaceId}`);
     }
+
+    // Centralized autoupdate: shells out to `hivemind update` (npm-based,
+    // refreshes every detected agent in one shot). Best-effort, fully
+    // self-contained because the pi extension ships as raw .ts (no shared-
+    // module imports allowed). Mirrors src/hooks/shared/autoupdate.ts —
+    // keep in sync.
+    if (creds && creds.autoupdate !== false) {
+      try {
+        const which = execSync("which hivemind 2>/dev/null", { encoding: "utf-8", timeout: 2000 }).trim();
+        if (which) {
+          await new Promise<void>((resolve) => {
+            const child = spawn(which, ["update"], { stdio: ["ignore", "pipe", "pipe"], timeout: 90_000 });
+            let out = "";
+            child.stdout?.on("data", d => { out += d.toString(); });
+            child.stderr?.on("data", d => { out += d.toString(); });
+            child.on("close", () => {
+              const m = out.match(/Updated to .+\./);
+              if (m) process.stderr.write(`✅ Hivemind ${m[0]} Restart pi to apply.\n`);
+              resolve();
+            });
+            child.on("error", () => resolve());
+          });
+        }
+      } catch { /* network down / which missing — silent */ }
+    }
+
     if (creds && captureEnabled) {
       // Other agents' session-start hooks create the memory + sessions tables
       // via DeeplakeApi.ensureTable / ensureSessionsTable. The pi extension is

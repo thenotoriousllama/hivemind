@@ -53,9 +53,7 @@ var init_index_marker_store = __esm({
 });
 
 // dist/src/hooks/codex/session-start-setup.js
-import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join7 } from "node:path";
-import { execSync as execSync2 } from "node:child_process";
+import { join as join6 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 
 // dist/src/commands/auth.js
@@ -555,71 +553,11 @@ function readStdin() {
   });
 }
 
-// dist/src/utils/version-check.js
-import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname, join as join5 } from "node:path";
-var GITHUB_RAW_PKG = "https://raw.githubusercontent.com/activeloopai/hivemind/main/package.json";
-function getInstalledVersion(bundleDir, pluginManifestDir) {
-  try {
-    const pluginJson = join5(bundleDir, "..", pluginManifestDir, "plugin.json");
-    const plugin = JSON.parse(readFileSync4(pluginJson, "utf-8"));
-    if (plugin.version)
-      return plugin.version;
-  } catch {
-  }
-  try {
-    const stamp = readFileSync4(join5(bundleDir, "..", ".hivemind_version"), "utf-8").trim();
-    if (stamp)
-      return stamp;
-  } catch {
-  }
-  const HIVEMIND_PKG_NAMES = /* @__PURE__ */ new Set([
-    "hivemind",
-    "hivemind-codex",
-    "@deeplake/hivemind",
-    "@deeplake/hivemind-codex",
-    "@activeloop/hivemind",
-    "@activeloop/hivemind-codex"
-  ]);
-  let dir = bundleDir;
-  for (let i = 0; i < 5; i++) {
-    const candidate = join5(dir, "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync4(candidate, "utf-8"));
-      if (HIVEMIND_PKG_NAMES.has(pkg.name) && pkg.version)
-        return pkg.version;
-    } catch {
-    }
-    const parent = dirname(dir);
-    if (parent === dir)
-      break;
-    dir = parent;
-  }
-  return null;
-}
-async function getLatestVersion(timeoutMs = 3e3) {
-  try {
-    const res = await fetch(GITHUB_RAW_PKG, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok)
-      return null;
-    const pkg = await res.json();
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-function isNewer(latest, current) {
-  const parse = (v) => v.split(".").map(Number);
-  const [la, lb, lc] = parse(latest);
-  const [ca, cb, cc] = parse(current);
-  return la > ca || la === ca && lb > cb || la === ca && lb === cb && lc > cc;
-}
-
 // dist/src/utils/wiki-log.js
 import { mkdirSync as mkdirSync3, appendFileSync as appendFileSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join5 } from "node:path";
 function makeWikiLogger(hooksDir, filename = "deeplake-wiki.log") {
-  const path = join6(hooksDir, filename);
+  const path = join5(hooksDir, filename);
   return {
     path,
     log(msg) {
@@ -633,10 +571,96 @@ function makeWikiLogger(hooksDir, filename = "deeplake-wiki.log") {
   };
 }
 
+// dist/src/hooks/shared/autoupdate.js
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+var log3 = (msg) => log("autoupdate", msg);
+var RESTART_HINT = {
+  claude: "Run /reload-plugins to apply.",
+  codex: "Restart Codex to apply.",
+  cursor: "Restart Cursor to apply.",
+  hermes: "Restart Hermes to apply.",
+  pi: "Restart pi to apply.",
+  openclaw: "Restart OpenClaw to apply."
+};
+var defaultStderr = (msg) => process.stderr.write(msg);
+var defaultSpawn = (cmd, args, timeoutMs) => new Promise((resolve) => {
+  const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => {
+    stdout += d.toString();
+  });
+  child.stderr.on("data", (d) => {
+    stderr += d.toString();
+  });
+  child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+  child.on("error", () => resolve({ stdout, stderr, code: 1 }));
+});
+async function findHivemindOnPath() {
+  try {
+    const { stdout } = await execFileAsync("which", ["hivemind"], { timeout: 2e3 });
+    const path = stdout.trim();
+    return path.length > 0 ? path : null;
+  } catch {
+    return null;
+  }
+}
+function extractUpdateSummary(combined) {
+  const lines = combined.split(/\r?\n/);
+  for (const re of [/Updated to .+\./, /Update available: .+/, /is up to date/]) {
+    const hit = lines.map((l) => l.trim()).find((l) => re.test(l));
+    if (hit)
+      return hit;
+  }
+  return null;
+}
+async function autoUpdate(creds, opts) {
+  log3(`agent=${opts.agent} entered`);
+  if (!creds?.token) {
+    log3(`agent=${opts.agent} skip: no creds.token`);
+    return;
+  }
+  if (creds.autoupdate === false) {
+    log3(`agent=${opts.agent} skip: autoupdate=false`);
+    return;
+  }
+  const stderr = opts.stderr ?? defaultStderr;
+  const timeoutMs = opts.timeoutMs ?? 9e4;
+  const binaryPath = opts.hivemindBinaryPath !== void 0 ? opts.hivemindBinaryPath : await findHivemindOnPath();
+  if (!binaryPath) {
+    log3(`agent=${opts.agent} skip: hivemind binary not on PATH`);
+    return;
+  }
+  log3(`agent=${opts.agent} binary=${binaryPath} \u2192 spawning update`);
+  const spawnFn = opts.spawn ?? defaultSpawn;
+  let result;
+  try {
+    result = await spawnFn(binaryPath, ["update"], timeoutMs);
+  } catch (e) {
+    log3(`agent=${opts.agent} spawn threw: ${e?.message ?? e}`);
+    return;
+  }
+  log3(`agent=${opts.agent} spawn done: code=${result.code} stdout=${result.stdout.length}B stderr=${result.stderr.length}B`);
+  if (result.code !== 0 && !/Update available/.test(result.stderr + result.stdout)) {
+    return;
+  }
+  const summary = extractUpdateSummary(result.stdout + "\n" + result.stderr);
+  if (!summary)
+    return;
+  if (/Updated to/.test(summary)) {
+    stderr(`\u2705 Hivemind ${summary} ${RESTART_HINT[opts.agent]}
+`);
+  } else if (/Update available/.test(summary)) {
+    stderr(`\u2B06\uFE0F Hivemind: ${summary}
+`);
+  }
+}
+
 // dist/src/hooks/codex/session-start-setup.js
-var log3 = (msg) => log("codex-session-setup", msg);
-var __bundleDir = dirname2(fileURLToPath(import.meta.url));
-var { log: wikiLog } = makeWikiLogger(join7(homedir4(), ".codex", "hooks"));
+var log4 = (msg) => log("codex-session-setup", msg);
+var { log: wikiLog } = makeWikiLogger(join6(homedir4(), ".codex", "hooks"));
 async function createPlaceholder(api, table, sessionId, cwd, userName, orgName, workspaceId) {
   const summaryPath = `/summaries/${userName}/${sessionId}.md`;
   const existing = await api.query(`SELECT path FROM "${table}" WHERE path = '${sqlStr(summaryPath)}' LIMIT 1`);
@@ -665,7 +689,7 @@ async function main() {
   const input = await readStdin();
   const creds = loadCredentials();
   if (!creds?.token) {
-    log3("no credentials");
+    log4("no credentials");
     return;
   }
   if (!creds.userName) {
@@ -673,10 +697,11 @@ async function main() {
       const { userInfo: userInfo2 } = await import("node:os");
       creds.userName = userInfo2().username ?? "unknown";
       saveCredentials(creds);
-      log3(`backfilled userName: ${creds.userName}`);
+      log4(`backfilled userName: ${creds.userName}`);
     } catch {
     }
   }
+  await autoUpdate(creds, { agent: "codex" });
   const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
   if (input.session_id) {
     try {
@@ -688,49 +713,15 @@ async function main() {
         if (captureEnabled) {
           await createPlaceholder(api, config.tableName, input.session_id, input.cwd ?? "", config.userName, config.orgName, config.workspaceId);
         }
-        log3("setup complete");
+        log4("setup complete");
       }
     } catch (e) {
-      log3(`setup failed: ${e.message}`);
+      log4(`setup failed: ${e.message}`);
       wikiLog(`SessionSetup: failed for ${input.session_id}: ${e.message}`);
     }
   }
-  const autoupdate = creds.autoupdate !== false;
-  try {
-    const current = getInstalledVersion(__bundleDir, ".codex-plugin");
-    if (current) {
-      const latest = await getLatestVersion();
-      if (latest && isNewer(latest, current)) {
-        if (autoupdate) {
-          log3(`autoupdate: updating ${current} \u2192 ${latest}`);
-          try {
-            const tag = `v${latest}`;
-            if (!/^v\d+\.\d+\.\d+$/.test(tag))
-              throw new Error(`unsafe version tag: ${tag}`);
-            const findCmd = `INSTALL_DIR=""; CACHE_DIR=$(find ~/.codex/plugins/cache -maxdepth 3 -name "hivemind" -type d 2>/dev/null | head -1); if [ -n "$CACHE_DIR" ]; then INSTALL_DIR=$(ls -1d "$CACHE_DIR"/*/ 2>/dev/null | tail -1); elif [ -d ~/.codex/hivemind ]; then INSTALL_DIR=~/.codex/hivemind; fi; if [ -n "$INSTALL_DIR" ]; then TMPDIR=$(mktemp -d); git clone --depth 1 --branch ${tag} -q https://github.com/activeloopai/hivemind.git "$TMPDIR/hivemind" 2>/dev/null && cp -r "$TMPDIR/hivemind/codex/"* "$INSTALL_DIR/" 2>/dev/null; rm -rf "$TMPDIR"; fi`;
-            execSync2(findCmd, { stdio: "ignore", timeout: 6e4 });
-            process.stderr.write(`Hivemind auto-updated: ${current} \u2192 ${latest}. Restart Codex to apply.
-`);
-            log3(`autoupdate succeeded: ${current} \u2192 ${latest} (tag: ${tag})`);
-          } catch (e) {
-            process.stderr.write(`Hivemind update available: ${current} \u2192 ${latest}. Auto-update failed.
-`);
-            log3(`autoupdate failed: ${e.message}`);
-          }
-        } else {
-          process.stderr.write(`Hivemind update available: ${current} \u2192 ${latest}.
-`);
-          log3(`update available (autoupdate off): ${current} \u2192 ${latest}`);
-        }
-      } else {
-        log3(`version up to date: ${current}`);
-      }
-    }
-  } catch (e) {
-    log3(`version check failed: ${e.message}`);
-  }
 }
 main().catch((e) => {
-  log3(`fatal: ${e.message}`);
+  log4(`fatal: ${e.message}`);
   process.exit(0);
 });
