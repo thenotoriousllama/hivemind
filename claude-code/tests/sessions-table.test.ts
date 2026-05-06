@@ -314,6 +314,32 @@ describe("ensureSkillsTable schema (skilify provenance table)", () => {
     expect(api.query).not.toHaveBeenCalled();
   });
 
+  it("rejects an invalid sessions table name (HIVEMIND_SESSIONS_TABLE config injection guard)", async () => {
+    const { DeeplakeApi } = await import("../../src/deeplake-api.js");
+    const api = new DeeplakeApi("token", "https://api.test", "org", "ws", "memory");
+    api.query = vi.fn() as typeof api.query;
+    api.listTables = vi.fn().mockResolvedValue([]) as typeof api.listTables;
+
+    await expect(api.ensureSessionsTable(`sessions"; DROP TABLE memory; --`)).rejects.toThrow(/Invalid SQL identifier/);
+    await expect(api.ensureSessionsTable("sessions-test")).rejects.toThrow(/Invalid SQL identifier/);
+    await expect(api.ensureSessionsTable("sessions test")).rejects.toThrow(/Invalid SQL identifier/);
+    expect(api.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid memory table name (HIVEMIND_TABLE config injection guard)", async () => {
+    const { DeeplakeApi } = await import("../../src/deeplake-api.js");
+    const api = new DeeplakeApi("token", "https://api.test", "org", "ws", `memory"; DROP TABLE x; --`);
+    api.query = vi.fn() as typeof api.query;
+    api.listTables = vi.fn().mockResolvedValue([]) as typeof api.listTables;
+
+    // Default ensureTable() uses constructor's tableName — should reject
+    await expect(api.ensureTable()).rejects.toThrow(/Invalid SQL identifier/);
+    // Explicit override also rejected
+    await expect(api.ensureTable("memory-test")).rejects.toThrow(/Invalid SQL identifier/);
+    await expect(api.ensureTable("memory test")).rejects.toThrow(/Invalid SQL identifier/);
+    expect(api.query).not.toHaveBeenCalled();
+  });
+
   it("skips CREATE TABLE when the table already exists", async () => {
     const { DeeplakeApi } = await import("../../src/deeplake-api.js");
     const api = new DeeplakeApi("token", "https://api.test", "org", "ws", "memory");

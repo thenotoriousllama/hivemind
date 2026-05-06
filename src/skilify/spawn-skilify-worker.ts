@@ -47,7 +47,11 @@ export function spawnSkilifyWorker(opts: SkilifySpawnOptions): void {
   const { config, cwd, projectKey, project, bundleDir, agent, scopeConfig, currentSessionId, reason } = opts;
 
   const tmpDir = join(tmpdir(), `deeplake-skilify-${projectKey}-${Date.now()}`);
-  mkdirSync(tmpDir, { recursive: true });
+  // mode 0o700: tmpDir holds config.json with the user's full-org Deeplake API token.
+  // The file itself is written 0o600 below, but a world-readable directory still
+  // leaks the file's existence + name to other users on the host. Mirror of the
+  // Pi extension's spawnPiSkilifyWorker which already uses 0o700.
+  mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
 
   // Resolve the gate CLI for this agent up front (faster cold-start in the
   // worker, fail-fast if the binary doesn't exist on this machine).

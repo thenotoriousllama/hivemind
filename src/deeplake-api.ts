@@ -428,7 +428,12 @@ export class DeeplakeApi {
 
   /** Create the memory table if it doesn't already exist. Migrate columns on existing tables. */
   async ensureTable(name?: string): Promise<void> {
-    const tbl = name ?? this.tableName;
+    // sqlIdent throws on anything outside [A-Za-z_][A-Za-z0-9_]* — protects
+    // against HIVEMIND_TABLE config injection (a stray quote would otherwise
+    // break CREATE TABLE / ALTER COLUMN / CREATE INDEX startup, and widen the
+    // SQL-injection surface for config-driven values). Mirror of the
+    // ensureSkillsTable guard (commit c0e77b8).
+    const tbl = sqlIdent(name ?? this.tableName);
     const tables = await this.listTables();
     if (!tables.includes(tbl)) {
       log(`table "${tbl}" not found, creating`);
@@ -475,11 +480,15 @@ export class DeeplakeApi {
 
   /** Create the sessions table (uses JSONB for message since every row is a JSON event). */
   async ensureSessionsTable(name: string): Promise<void> {
+    // sqlIdent throws on anything outside [A-Za-z_][A-Za-z0-9_]* — same
+    // injection guard rationale as ensureTable / ensureSkillsTable. The name
+    // here ultimately comes from HIVEMIND_SESSIONS_TABLE.
+    const safe = sqlIdent(name);
     const tables = await this.listTables();
-    if (!tables.includes(name)) {
-      log(`table "${name}" not found, creating`);
+    if (!tables.includes(safe)) {
+      log(`table "${safe}" not found, creating`);
       await this.createTableWithRetry(
-        `CREATE TABLE IF NOT EXISTS "${name}" (` +
+        `CREATE TABLE IF NOT EXISTS "${safe}" (` +
           `id TEXT NOT NULL DEFAULT '', ` +
           `path TEXT NOT NULL DEFAULT '', ` +
           `filename TEXT NOT NULL DEFAULT '', ` +
@@ -494,16 +503,16 @@ export class DeeplakeApi {
           `creation_date TEXT NOT NULL DEFAULT '', ` +
           `last_update_date TEXT NOT NULL DEFAULT ''` +
         `) USING deeplake`,
-        name,
+        safe,
       );
-      log(`table "${name}" created`);
-      if (!tables.includes(name)) this._tablesCache = [...tables, name];
+      log(`table "${safe}" created`);
+      if (!tables.includes(safe)) this._tablesCache = [...tables, safe];
     }
     // Always verify message_embedding is present (same rationale as ensureTable).
-    await this.ensureEmbeddingColumn(name, MESSAGE_EMBEDDING_COL);
+    await this.ensureEmbeddingColumn(safe, MESSAGE_EMBEDDING_COL);
     // Same fallback for the `agent` column (see ensureTable for rationale).
-    await this.ensureColumn(name, "agent", "TEXT NOT NULL DEFAULT ''");
-    await this.ensureLookupIndex(name, "path_creation_date", `("path", "creation_date")`);
+    await this.ensureColumn(safe, "agent", "TEXT NOT NULL DEFAULT ''");
+    await this.ensureLookupIndex(safe, "path_creation_date", `("path", "creation_date")`);
   }
 
   /**
