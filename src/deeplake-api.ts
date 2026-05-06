@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { log as _log } from "./utils/debug.js";
-import { sqlStr } from "./utils/sql.js";
+import { sqlStr, sqlIdent } from "./utils/sql.js";
 import { SUMMARY_EMBEDDING_COL, MESSAGE_EMBEDDING_COL } from "./embeddings/columns.js";
 import { deeplakeClientHeader } from "./utils/client-header.js";
 
@@ -517,11 +517,16 @@ export class DeeplakeApi {
    * worker.
    */
   async ensureSkillsTable(name: string): Promise<void> {
+    // Validate the table identifier before any SQL interpolation.
+    // `name` ultimately comes from HIVEMIND_SKILLS_TABLE — a stray quote
+    // or other invalid character would otherwise break startup AND widen
+    // the SQL-injection surface for config-driven values.
+    const safe = sqlIdent(name);
     const tables = await this.listTables();
-    if (!tables.includes(name)) {
-      log(`table "${name}" not found, creating`);
+    if (!tables.includes(safe)) {
+      log(`table "${safe}" not found, creating`);
       await this.createTableWithRetry(
-        `CREATE TABLE IF NOT EXISTS "${name}" (` +
+        `CREATE TABLE IF NOT EXISTS "${safe}" (` +
           `id TEXT NOT NULL DEFAULT '', ` +
           `name TEXT NOT NULL DEFAULT '', ` +
           `project TEXT NOT NULL DEFAULT '', ` +
@@ -539,11 +544,11 @@ export class DeeplakeApi {
           `created_at TEXT NOT NULL DEFAULT '', ` +
           `updated_at TEXT NOT NULL DEFAULT ''` +
         `) USING deeplake`,
-        name,
+        safe,
       );
-      log(`table "${name}" created`);
-      if (!tables.includes(name)) this._tablesCache = [...tables, name];
+      log(`table "${safe}" created`);
+      if (!tables.includes(safe)) this._tablesCache = [...tables, safe];
     }
-    await this.ensureLookupIndex(name, "project_key_name", `("project_key", "name")`);
+    await this.ensureLookupIndex(safe, "project_key_name", `("project_key", "name")`);
   }
 }

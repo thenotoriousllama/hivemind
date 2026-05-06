@@ -299,6 +299,21 @@ describe("ensureSkillsTable schema (skilify provenance table)", () => {
     // previous test/run. We verify the CREATE TABLE itself instead.
   });
 
+  it("rejects an invalid skills table name (HIVEMIND_SKILLS_TABLE config injection guard)", async () => {
+    const { DeeplakeApi } = await import("../../src/deeplake-api.js");
+    const api = new DeeplakeApi("token", "https://api.test", "org", "ws", "memory");
+    api.query = vi.fn() as typeof api.query;
+    api.listTables = vi.fn().mockResolvedValue([]) as typeof api.listTables;
+
+    // Stray quote — would otherwise interpolate into CREATE TABLE and corrupt the SQL
+    await expect(api.ensureSkillsTable(`skills"; DROP TABLE memory; --`)).rejects.toThrow(/Invalid SQL identifier/);
+    // Hyphens / spaces / dots also rejected (sqlIdent uses [A-Za-z_][A-Za-z0-9_]*)
+    await expect(api.ensureSkillsTable("skills-test")).rejects.toThrow(/Invalid SQL identifier/);
+    await expect(api.ensureSkillsTable("skills test")).rejects.toThrow(/Invalid SQL identifier/);
+    // No query should have been issued for any of these
+    expect(api.query).not.toHaveBeenCalled();
+  });
+
   it("skips CREATE TABLE when the table already exists", async () => {
     const { DeeplakeApi } = await import("../../src/deeplake-api.js");
     const api = new DeeplakeApi("token", "https://api.test", "org", "ws", "memory");
