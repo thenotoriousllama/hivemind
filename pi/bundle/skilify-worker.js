@@ -770,9 +770,10 @@ async function main() {
     wlog(`extracted ${allPairs.length} pairs across ${usable.length} sessions`);
     const prompt = buildPrompt(allPairs);
     writeFileSync3(promptPath, prompt);
-    wlog(`running gate (agent=${cfg.agent}, bin=${cfg.gateBin}, prompt=${prompt.length} chars)`);
+    const gateAgent = cfg.gateAgent ?? cfg.agent;
+    wlog(`running gate (agent=${cfg.agent}, gateAgent=${gateAgent}, bin=${cfg.gateBin}, prompt=${prompt.length} chars)`);
     const gate = runGate({
-      agent: cfg.agent,
+      agent: gateAgent,
       prompt,
       bin: cfg.gateBin,
       cursorModel: cfg.cursorModel,
