@@ -248,12 +248,40 @@ describe("OpenClaw skilify worker (mining) wiring", () => {
     // After bundling, the createRequire + dynamic require call must still be there
     expect(text).toMatch(/createRequire\(import\.meta\.url\)/);
     expect(text).toMatch(/requireFromOpenclaw\("node:child_process"\)/);
-    // realSpawn extracted from the dynamic require — actual function at runtime
-    expect(text).toMatch(/var\s*\{\s*spawn:\s*realSpawn\s*\}\s*=\s*requireFromOpenclaw/);
+    // realSpawn extracted from the dynamic require — actual function at runtime.
+    // The destructure may also pull other primitives (e.g. execFileSync) for the
+    // gate-agent detection path; allow extra destructured fields.
+    expect(text).toMatch(/var\s*\{\s*spawn:\s*realSpawn[\s\S]{0,200}\}\s*=\s*requireFromOpenclaw/);
     // spawnOpenclawSkilifyWorker function present in bundle
     expect(text).toMatch(/spawnOpenclawSkilifyWorker/);
     // realSpawn(process.execPath, [path, configPath], ...) — the actual spawn site
     expect(text).toMatch(/realSpawn\(process\.execPath/);
+  });
+
+  it("openclaw spawn helper detects a delegate gate CLI and threads gateAgent into the worker config", () => {
+    // Issue: openclaw isn't itself a CLI agent (no `openclaw -p <prompt>`),
+    // so passing agent="openclaw" to the gate-runner produces "agent binary
+    // not found at undefined". Fix: detect a real CLI on PATH at spawn time
+    // and pass it as `gateAgent`; the worker dispatches `runGate` against
+    // that delegate while keeping `agent: "openclaw"` for source_agent
+    // provenance in the skills table. Regression guard.
+    const src = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "src", "index.ts"), "utf-8");
+    expect(src).toMatch(/function detectOpenclawGateAgent\b/);
+    // The candidate list: the five CLIs the worker's gate-runner knows about.
+    expect(src).toMatch(/"claude_code",\s*"claude"/);
+    expect(src).toMatch(/"codex",\s*"codex"/);
+    expect(src).toMatch(/"cursor",\s*"cursor-agent"/);
+    expect(src).toMatch(/"hermes",\s*"hermes"/);
+    expect(src).toMatch(/"pi",\s*"pi"/);
+    // Spawn helper bails out early if no delegate is on PATH (don't waste IO).
+    expect(src).toMatch(/no delegate gate CLI found/);
+    // gateAgent threaded into the worker config — same key the worker reads.
+    expect(src).toMatch(/gateAgent,/);
+    // Bundled output must preserve the detection + threading.
+    const text = readFileSync(resolve(BUNDLE_ROOT, "openclaw", "dist", "index.js"), "utf-8");
+    expect(text).toMatch(/detectOpenclawGateAgent/);
+    expect(text).toMatch(/gateAgent/);
+    expect(text).toMatch(/no delegate gate CLI found/);
   });
 
   it("openclaw worker bundle embeds the same shared worker code as other agents", () => {

@@ -77,7 +77,7 @@ import { createHash } from "node:crypto";
 // returned by createRequire.
 import { createRequire } from "node:module";
 const requireFromOpenclaw = createRequire(import.meta.url);
-const { spawn: realSpawn } = requireFromOpenclaw("node:child_process") as typeof import("node:child_process");
+const { spawn: realSpawn, execFileSync: realExecFileSync } = requireFromOpenclaw("node:child_process") as typeof import("node:child_process");
 
 interface PluginConfig {
   autoCapture?: boolean;
@@ -345,9 +345,45 @@ interface OpenclawSpawnArgs {
   loggerWarn?: (msg: string) => void;
 }
 
+/**
+ * Pick a delegate gate-CLI for openclaw skilify mining.
+ *
+ * Openclaw is a gateway, not an agent CLI — there's no `openclaw -p <prompt>`
+ * binary the gate-runner can invoke. Mining sessions still need a gate call
+ * to verdict "is this worth a skill?", so we delegate to whichever real CLI
+ * the user happens to have installed alongside openclaw. Preference order
+ * matches the worker's own dispatch entries; first hit wins.
+ *
+ * Returns null when no delegate is available (e.g. openclaw is the only
+ * agent on this machine). Caller should skip spawning in that case — the
+ * worker would just hit `gate failed: agent binary not found` and waste IO.
+ */
+type GateAgent = "claude_code" | "codex" | "cursor" | "hermes" | "pi";
+function detectOpenclawGateAgent(): GateAgent | null {
+  const candidates: Array<[GateAgent, string]> = [
+    ["claude_code", "claude"],
+    ["codex", "codex"],
+    ["cursor", "cursor-agent"],
+    ["hermes", "hermes"],
+    ["pi", "pi"],
+  ];
+  for (const [agent, bin] of candidates) {
+    try {
+      realExecFileSync("which", [bin], { stdio: ["ignore", "pipe", "ignore"] });
+      return agent;
+    } catch { /* not on PATH, try next */ }
+  }
+  return null;
+}
+
 function spawnOpenclawSkilifyWorker(a: OpenclawSpawnArgs): void {
   if (!fsExists(OPENCLAW_SKILIFY_WORKER_PATH)) {
     a.loggerWarn?.(`skilify worker missing at ${OPENCLAW_SKILIFY_WORKER_PATH} — reinstall openclaw plugin`);
+    return;
+  }
+  const gateAgent = detectOpenclawGateAgent();
+  if (!gateAgent) {
+    a.loggerWarn?.(`skilify spawn: no delegate gate CLI found on PATH (need one of: claude, codex, cursor-agent, hermes, pi). Mining skipped.`);
     return;
   }
   const { key: projectKey, project } = deriveOpenclawProjectKey(a.channel);
@@ -378,11 +414,12 @@ function spawnOpenclawSkilifyWorker(a: OpenclawSpawnArgs): void {
     projectKey,
     project,
     agent: "openclaw",
+    gateAgent,  // delegate CLI for the worker's gate call (openclaw has no CLI of its own)
     scope: "me" as const,
     team: [] as string[],
     install: "global" as const,
     tmpDir,
-    gateBin: null,  // worker's gate-runner falls back to its agent dispatch
+    gateBin: null,  // worker uses gateAgent to look up the binary itself
     cursorModel: undefined,
     hermesProvider: undefined,
     hermesModel: undefined,
@@ -604,11 +641,17 @@ export default definePluginEntry({
         handler: async () => {
           const { ensureHivemindAllowlisted } = await loadSetupConfig();
           const result = ensureHivemindAllowlisted();
+          // Phase C: surface skilify CLI in setup output. OpenClaw users have no
+          // session-start banner equivalent and no Bash tool — without this hint
+          // they can't discover that mining runs in the background or that they
+          // can pull teammates' skills. The CLI itself runs from the user's
+          // terminal, not from the agent.
+          const skilifyHint = `\n\nSkill mining (skilify) runs in the background after each turn — your conversations get crystallised into reusable skills automatically. From your terminal:\n  hivemind skilify status   — see what's been mined\n  hivemind skilify pull     — fetch teammates' skills`;
           if (result.status === "already-set") {
-            return { text: `✅ Hivemind tools are already enabled in your allowlist.\n\nNo changes needed — memory tools are available to the agent.` };
+            return { text: `✅ Hivemind tools are already enabled in your allowlist.\n\nNo changes needed — memory tools are available to the agent.${skilifyHint}` };
           }
           if (result.status === "added") {
-            return { text: `✅ Added "hivemind" to your tool allowlist.\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index.\n\nBackup of previous config: ${result.backupPath}` };
+            return { text: `✅ Added "hivemind" to your tool allowlist.\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index.\n\nBackup of previous config: ${result.backupPath}${skilifyHint}` };
           }
           return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath} and add "hivemind" to the "alsoAllow" array under "tools".` };
         },

@@ -44,6 +44,15 @@ interface WorkerConfig {
   projectKey: string;
   project: string;
   agent: string;
+  /**
+   * CLI dispatch label for the gate call. Optional. When unset, the gate falls
+   * back to `agent`. Used by host environments whose `agent` provenance label
+   * isn't itself a CLI we can shell out to (currently: openclaw — a gateway
+   * with no `openclaw -p <prompt>` CLI of its own). Letting `agent` stay
+   * "openclaw" keeps the source_agent provenance honest in the skills table
+   * while `gateAgent` points the gate-runner at a real CLI on the machine.
+   */
+  gateAgent?: Agent;
   scope: "me" | "team" | "org";
   team: string[];
   install: "project" | "global";
@@ -376,9 +385,10 @@ async function main(): Promise<void> {
     const prompt = buildPrompt(allPairs);
     writeFileSync(promptPath, prompt);
 
-    wlog(`running gate (agent=${cfg.agent}, bin=${cfg.gateBin}, prompt=${prompt.length} chars)`);
+    const gateAgent = (cfg.gateAgent ?? cfg.agent) as Agent;
+    wlog(`running gate (agent=${cfg.agent}, gateAgent=${gateAgent}, bin=${cfg.gateBin}, prompt=${prompt.length} chars)`);
     const gate = runGate({
-      agent: cfg.agent as Agent,
+      agent: gateAgent,
       prompt,
       bin: cfg.gateBin,
       cursorModel: cfg.cursorModel,
