@@ -255,9 +255,12 @@ async function unpullSkills(args: string[]): Promise<void> {
   const all = takeBooleanFlag(work, "--all");
   const legacyCleanup = takeBooleanFlag(work, "--legacy-cleanup");
 
+  // Throw rather than `process.exit(1)` so the dispatcher's `.catch` is
+  // the single point that surfaces the failure — avoids a second exit
+  // call (and a second mocked-throw in tests) that would manifest as an
+  // unhandled promise rejection.
   if (toRaw !== "project" && toRaw !== "global") {
-    console.error(`Invalid --to '${toRaw}'. Use 'project' or 'global'.`);
-    process.exit(1);
+    throw new Error(`Invalid --to '${toRaw}'. Use 'project' or 'global'.`);
   }
 
   let users: string[] = [];
@@ -266,8 +269,7 @@ async function unpullSkills(args: string[]): Promise<void> {
 
   const config = loadConfig();
   if (!config) {
-    console.error("Not logged in. Run: hivemind login");
-    process.exit(1);
+    throw new Error("Not logged in. Run: hivemind login");
   }
 
   const summary = runUnpull({
@@ -321,10 +323,16 @@ export function runSkilifyCommand(args: string[]): void {
     return;
   }
   if (sub === "unpull") {
-    unpullSkills(args.slice(1)).catch(e => {
-      console.error(`unpull error: ${e?.message ?? e}`);
-      process.exit(1);
-    });
+    unpullSkills(args.slice(1))
+      .catch(e => {
+        console.error(`unpull error: ${e?.message ?? e}`);
+        process.exit(1);
+      })
+      // process.exit is mocked in unit tests as a throw; swallow that
+      // secondary rejection so it doesn't surface as an unhandled error.
+      // In production the real process.exit kills the process, so this
+      // tail catch is unreachable.
+      .catch(() => { /* test-only safety net */ });
     return;
   }
   if (sub === "team") {

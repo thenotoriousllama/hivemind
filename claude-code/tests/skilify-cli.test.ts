@@ -245,6 +245,103 @@ describe("pull", () => {
   // (buildPullSql, resolvePullDestination).
 });
 
+// ── unpull ────────────────────────────────────────────────────────────────
+
+describe("unpull", () => {
+  // Each test runs under a fresh HOME so the manifest writes by
+  // pull/unpull don't pollute the developer's real ~/.deeplake state.
+  let unpullHome: string;
+  let originalHome: string | undefined;
+  beforeEach(() => {
+    unpullHome = mkdtempSync(join(tmpdir(), "skilify-cli-unpull-home-"));
+    originalHome = process.env.HOME;
+    process.env.HOME = unpullHome;
+  });
+  afterEach(() => {
+    try { rmSync(unpullHome, { recursive: true, force: true }); } catch { /* nothing */ }
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  it("--dry-run on empty manifest reports zero work", () => {
+    runSkilifyCommand(["unpull", "--dry-run"]);
+    const out = logged.join("\n");
+    expect(out).toMatch(/Scanning:/);
+    expect(out).toMatch(/Filter:\s+dry-run/);
+    expect(out).toMatch(/Result: 0 removed, 0 dry-run, 0 kept\./);
+  });
+
+  it("default filter description is 'no filter — all pulled'", () => {
+    runSkilifyCommand(["unpull"]);
+    expect(logged.join("\n")).toMatch(/Filter:\s+\(no filter — all pulled\)/);
+  });
+
+  it("composes multiple flags into the filter description", () => {
+    runSkilifyCommand(["unpull", "--user", "alice", "--not-mine", "--dry-run", "--all", "--legacy-cleanup"]);
+    const out = logged.join("\n");
+    expect(out).toMatch(/users=alice/);
+    expect(out).toMatch(/not-mine/);
+    expect(out).toMatch(/all/);
+    expect(out).toMatch(/legacy-cleanup/);
+    expect(out).toMatch(/dry-run/);
+  });
+
+  it("--users a,b,c parses CSV into the filter", () => {
+    runSkilifyCommand(["unpull", "--users", "alice,bob,carol", "--dry-run"]);
+    expect(logged.join("\n")).toMatch(/users=alice,bob,carol/);
+  });
+
+  it("--to project scopes the scanning root to cwd", () => {
+    const dir = mkdtempSync(join(tmpdir(), "skilify-cli-unpull-proj-"));
+    process.chdir(dir);
+    runSkilifyCommand(["unpull", "--to", "project", "--dry-run"]);
+    expect(logged.join("\n")).toMatch(new RegExp(`Scanning:\\s+${dir}/.claude/skills`));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--to with invalid value reports error", async () => {
+    // unpullSkills throws on bad input; the dispatcher's `.catch` logs
+    // the message via console.error and exits 1.
+    runSkilifyCommand(["unpull", "--to", "weird"]);
+    await new Promise(r => setImmediate(r));
+    expect(erred.join("\n")).toMatch(/Invalid --to/);
+  });
+
+  it("integrates with pull: round-trip clears manifest + disk", async () => {
+    // 1. pull populates manifest + disk
+    runSkilifyCommand(["pull", "--user", "alice", "--to", "global"]);
+    await new Promise(r => setImmediate(r));
+    const out1 = logged.join("\n");
+    expect(out1).toMatch(/1 written/);
+    logged = [];
+
+    // 2. unpull clears it
+    runSkilifyCommand(["unpull", "--user", "alice"]);
+    const out2 = logged.join("\n");
+    expect(out2).toMatch(/1 removed/);
+    expect(out2).toMatch(/fake-skill--alice/);
+
+    // 3. re-running unpull is idempotent (no entries, no errors)
+    logged = [];
+    runSkilifyCommand(["unpull"]);
+    expect(logged.join("\n")).toMatch(/Scanned 0 dir\(s\)/);
+  });
+
+  it("emits 'manifest-pruned' tag when an entry's directory is missing on disk", async () => {
+    // pull installs a skill, then we delete its dir out-of-band so the
+    // manifest entry becomes an orphan
+    runSkilifyCommand(["pull", "--user", "alice", "--to", "global"]);
+    await new Promise(r => setImmediate(r));
+    rmSync(join(unpullHome, ".claude", "skills"), { recursive: true, force: true });
+    logged = [];
+
+    runSkilifyCommand(["unpull"]);
+    const out = logged.join("\n");
+    expect(out).toMatch(/pruned \(orphan\)/);
+    expect(out).toMatch(/manifest-pruned/);
+  });
+});
+
 // ── usage / unknown ───────────────────────────────────────────────────────
 
 describe("usage", () => {

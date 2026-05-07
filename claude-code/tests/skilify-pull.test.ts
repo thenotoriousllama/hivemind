@@ -11,6 +11,7 @@ import {
   decideAction,
   runPull,
   isMissingTableError,
+  assertValidAuthor,
   type QueryFn,
 } from "../../src/skilify/pull.js";
 
@@ -34,6 +35,38 @@ afterEach(() => {
   try { rmSync(fakeHome, { recursive: true, force: true }); } catch { /* nothing */ }
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+});
+
+// ── assertValidAuthor ──────────────────────────────────────────────────────
+
+describe("assertValidAuthor", () => {
+  it("accepts emails, dotted names, and bare usernames", () => {
+    expect(() => assertValidAuthor("alice@example.com")).not.toThrow();
+    expect(() => assertValidAuthor("emanuele.fenocchi")).not.toThrow();
+    expect(() => assertValidAuthor("d")).not.toThrow();
+    expect(() => assertValidAuthor("davit-buniatyan")).not.toThrow();
+    expect(() => assertValidAuthor("user_42")).not.toThrow();
+  });
+
+  it("rejects empty author", () => {
+    expect(() => assertValidAuthor("")).toThrow(/empty/);
+  });
+
+  it("rejects path-traversal characters", () => {
+    expect(() => assertValidAuthor("../escape")).toThrow(/invalid/);
+    expect(() => assertValidAuthor("alice/bob")).toThrow(/invalid/);
+    expect(() => assertValidAuthor("alice\\bob")).toThrow(/invalid/);
+  });
+
+  it("rejects whitespace and shell metacharacters", () => {
+    expect(() => assertValidAuthor("alice bob")).toThrow(/invalid/);
+    expect(() => assertValidAuthor("alice;rm")).toThrow(/invalid/);
+    expect(() => assertValidAuthor("alice$(whoami)")).toThrow(/invalid/);
+  });
+
+  it("rejects authors longer than 64 chars", () => {
+    expect(() => assertValidAuthor("a".repeat(65))).toThrow(/too long/);
+  });
 });
 
 // ── buildPullSql ────────────────────────────────────────────────────────────
@@ -429,6 +462,25 @@ describe("runPull", () => {
     });
     expect(existsSync(join(projectSkillsRoot, "deploy--alice", "SKILL.md"))).toBe(true);
     expect(existsSync(join(projectSkillsRoot, "deploy--bob", "SKILL.md"))).toBe(true);
+  });
+
+  it("skips rows with invalid authors (path-traversal protection on the suffix segment)", async () => {
+    // Different project_keys so selectLatestPerName keeps both rows.
+    const rows = [
+      sampleRow({ name: "deploy", project_key: "pk-bad",  author: "../escape" }),
+      sampleRow({ name: "deploy", project_key: "pk-good", author: "alice" }),
+    ];
+    const { fn } = makeMockQuery(rows);
+    const summary = await runPull({
+      query: fn, tableName: "skills", install: "project", cwd: projectRoot,
+      users: [], dryRun: false, force: false,
+    });
+    expect(summary.wrote).toBe(1);
+    expect(summary.skipped).toBe(1);
+    // The valid author landed under <root>/<name>--<author>/
+    expect(existsSync(join(projectSkillsRoot, "deploy--alice", "SKILL.md"))).toBe(true);
+    // The invalid author would have produced "deploy--../escape" — must not exist
+    expect(existsSync(join(projectSkillsRoot, "deploy--..", "escape"))).toBe(false);
   });
 
   it("skips rows with invalid skill names instead of writing dangerous paths", async () => {
