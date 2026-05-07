@@ -106,6 +106,9 @@ async function main(): Promise<void> {
   // Skip if this is a sub-session spawned by the wiki worker
   if (process.env.HIVEMIND_WIKI_WORKER === "1") return;
 
+  const __hookT0 = Date.now();
+  log(`hook entered (pid=${process.pid})`);
+
   const input = await readStdin<SessionStartInput>();
 
   let creds = loadCredentials();
@@ -178,6 +181,7 @@ async function main(): Promise<void> {
       additionalContext,
     },
   }));
+  log(`hook done (${Date.now() - __hookT0}ms total)`);
 }
 
 main().catch((e) => { log(`fatal: ${e.message}`); process.exit(0); });

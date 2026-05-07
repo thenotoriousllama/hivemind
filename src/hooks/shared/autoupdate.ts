@@ -2,8 +2,8 @@
  * Shared autoupdate helper for session-start hooks.
  *
  * One source of truth: the npm package `@deeplake/hivemind`.
- * One mechanism: shell out to the `hivemind update` CLI, the same command
- * users run manually. Session-start is just the *trigger*.
+ * One mechanism: the `hivemind update` CLI, the same command users run
+ * manually. Session-start is just the *trigger*.
  *
  * Replaces the divergent legacy paths:
  *   - Claude Code:   `claude plugin update hivemind@hivemind --scope X`
@@ -15,210 +15,170 @@
  * Cursor / Hermes / pi previously had no autoupdate at all; they pick it
  * up for free here.
  *
- * Behavior:
- *   - No-op if creds.autoupdate === false (user opted out via
- *     `hivemind autoupdate off`)
- *   - No-op if the `hivemind` binary isn't on PATH (user installed via
- *     marketplace / ClawHub only — they stay on the legacy path until they
- *     migrate to npm)
- *   - Otherwise: spawn `hivemind update`, capture output, print a one-line
- *     summary to stderr if anything changed. Failures are silent so a
- *     broken network never blocks session-start.
+ * ## Hot-path constraint: NEVER block session-start
  *
- * The trigger is per-agent (each agent's session-start), but the action
- * is universal: `hivemind update` runs `npm install -g @latest` then
- * re-execs `hivemind install --skip-auth`, refreshing every detected
- * agent on the machine in one shot. So when Claude opens, Codex /
- * Cursor / Hermes / pi / OpenClaw all get refreshed too.
+ * Real-world testing 2026-05-06 surfaced a destructive bug: an awaited
+ * `hivemind update` spawn added 3-5s latency to every session start (the
+ * spawned process always fetches the npm registry, ~500ms typical, up to
+ * 3s+ on slow links). User flagged "destructive". Hard rule: no awaited
+ * spawns, no awaited fetches, on the session-start hot path.
+ *
+ * Implementation: fire-and-forget detached spawn. The hook returns
+ * immediately (sub-50ms). The spawned `hivemind update` process runs
+ * fully detached (`child.unref()`) and survives the parent's exit. The
+ * upgrade outcome is delivered on the NEXT session start, when
+ * `getInstalledVersion()` reads the freshly-upgraded plugin.json.
+ *
+ * The lock that prevents concurrent `hivemind update` runs no longer
+ * lives here (we'd release it instantly after dispatching, defeating
+ * its purpose). It lives in `src/cli/update.ts:runUpdate()` — the
+ * long-running update process owns the lock for its lifetime.
+ *
+ * Cache: a single mtime check on `~/.deeplake/.autoupdate-last-check`
+ * keeps us from spawning on every session-start. Spawn fires at most
+ * once per CACHE_TTL_MS (4h). The spawn itself is cheap (<10ms to
+ * dispatch) but firing 100×/day for a typical heavy user adds up; the
+ * cache cuts that to ~6×/day.
  */
 
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { openSync, closeSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync, statSync, utimesSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { Credentials } from "../../commands/auth-creds.js";
 import { log as _log } from "../../utils/debug.js";
 
-const execFileAsync = promisify(execFile);
 const log = (msg: string) => _log("autoupdate", msg);
 
 // Lazy: homedir() reads $HOME at call time, but capturing it at module
 // load would freeze the path before tests can override process.env.HOME.
-function lockPath(): string {
-  return join(homedir(), ".deeplake", ".autoupdate.lock");
+function lastCheckPath(): string {
+  return join(homedir(), ".deeplake", ".autoupdate-last-check");
 }
-const LOCK_STALE_MS = 5 * 60_000;  // 5 minutes — covers a slow-link npm install
+const CACHE_TTL_MS = 4 * 60 * 60_000;  // 4 hours
 
 export type AgentId = "claude" | "codex" | "cursor" | "hermes" | "pi" | "openclaw";
 
-const RESTART_HINT: Record<AgentId, string> = {
-  claude:   "Run /reload-plugins to apply.",
-  codex:    "Restart Codex to apply.",
-  cursor:   "Restart Cursor to apply.",
-  hermes:   "Restart Hermes to apply.",
-  pi:       "Restart pi to apply.",
-  openclaw: "Restart OpenClaw to apply.",
-};
-
-export interface SpawnResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-}
-
 export interface AutoUpdateOpts {
   agent: AgentId;
-  /** Per-call timeout for `hivemind update`. Default 90s — npm install -g + re-exec install can take 30-60s on a slow link. */
-  timeoutMs?: number;
   /** Test override: resolved hivemind binary path or null. When provided, skips the `which` lookup. */
   hivemindBinaryPath?: string | null;
-  /** Test override: replaces the actual subprocess spawn with a fake. */
-  spawn?: (cmd: string, args: string[], timeoutMs: number) => Promise<SpawnResult>;
-  /** Test override: replaces the stderr writer (so we can assert on the summary line). */
-  stderr?: (msg: string) => void;
-  /** Test override: skip the machine-wide lock so unit tests don't fight over `~/.deeplake/.autoupdate.lock`. */
-  skipLock?: boolean;
+  /** Test override: replaces the actual subprocess spawn with a fake. Must return the spawned child's pid (or 0). */
+  spawn?: (cmd: string, args: string[]) => { pid?: number };
+  /** Test override: skip the 4h-cache check (force the spawn even if recently checked). */
+  skipCache?: boolean;
 }
 
-const defaultStderr = (msg: string) => process.stderr.write(msg);
-
-const defaultSpawn = (cmd: string, args: string[], timeoutMs: number): Promise<SpawnResult> =>
-  new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", d => { stdout += d.toString(); });
-    child.stderr.on("data", d => { stderr += d.toString(); });
-    child.on("close", code => resolve({ stdout, stderr, code: code ?? 1 }));
-    child.on("error", () => resolve({ stdout, stderr, code: 1 }));
+/**
+ * Default detached spawn — fire-and-forget. The child process inherits no
+ * stdio, becomes its own session leader (`detached: true`), and is
+ * `unref`-ed so the parent can exit without waiting for it. Real Node
+ * semantics: this returns in < 5ms in practice (process fork is the only
+ * blocking cost, and it's cheap).
+ */
+const defaultSpawn = (cmd: string, args: string[]): { pid?: number } => {
+  const child = spawn(cmd, args, {
+    detached: true,
+    stdio: "ignore",
   });
+  child.unref();
+  // Swallow the unhandled 'error' event that fires synchronously when
+  // the binary doesn't exist — without this listener it'd crash the
+  // parent process.
+  child.on("error", () => {});
+  return { pid: child.pid };
+};
 
-async function findHivemindOnPath(): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync("which", ["hivemind"], { timeout: 2000 });
-    const path = stdout.trim();
-    return path.length > 0 ? path : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Try to acquire a machine-wide lock so only one `hivemind update` runs at
- * a time across all session-start hooks. Without this, two agents opening
- * simultaneously would race on `npm install -g` and `hivemind install
- * --skip-auth`, potentially leaving the install in a partial state.
- *
- * Implementation: O_EXCL on a file under `~/.deeplake/.autoupdate.lock`.
- * If another process holds it, we skip this round (the next session-start
- * will retry). A stale lock older than LOCK_STALE_MS is forcibly cleared —
- * covers the case where a previous holder crashed without releasing.
- *
- * Returns the lock path on success (caller must `releaseLock()` it), or
- * null if another holder is active.
- */
-function tryAcquireLock(): string | null {
-  const path = lockPath();
-  // Best-effort stale-lock cleanup. statSync may fail if the lock isn't
-  // there at all — that's fine, we proceed to the open.
-  try {
-    const age = Date.now() - statSync(path).mtimeMs;
-    if (age > LOCK_STALE_MS) {
-      log(`stale lock (${Math.round(age / 1000)}s old) — clearing`);
-      unlinkSync(path);
-    }
-  } catch { /* lock doesn't exist; that's the happy path */ }
-
-  // O_CREAT | O_EXCL | O_WRONLY — atomic create-or-fail. If the file
-  // already exists, another process holds the lock; we return null.
-  try {
-    const fd = openSync(path, "wx");
-    writeFileSync(path, `${process.pid}\n`);
-    closeSync(fd);
-    return path;
-  } catch {
-    return null;
-  }
-}
-
-function releaseLock(path: string): void {
-  try { unlinkSync(path); } catch { /* already gone — fine */ }
-}
-
-/**
- * Extract the one-line summary that `hivemind update` prints. Looking
- * for (in order of specificity):
- *   - "Updated to X.Y.Z."             — successful upgrade
- *   - "Update available: X → Y"       — couldn't apply (e.g. local-dev)
- *   - "is up to date"                 — no-op
- * Returns null if none of those phrases appear (probably an error).
- */
-export function extractUpdateSummary(combined: string): string | null {
-  const lines = combined.split(/\r?\n/);
-  for (const re of [/Updated to .+\./, /Update available: .+/, /is up to date/]) {
-    const hit = lines.map(l => l.trim()).find(l => re.test(l));
-    if (hit) return hit;
+/** Find the hivemind binary on PATH synchronously. ~5ms; on the hot path. */
+function findHivemindOnPath(): string | null {
+  // node:os doesn't expose `which`. Walk PATH manually — sync, fast,
+  // no subprocess.
+  const PATH = process.env.PATH ?? "";
+  const dirs = PATH.split(":").filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = join(dir, "hivemind");
+    if (existsSync(candidate)) return candidate;
   }
   return null;
 }
 
+/** Return true if we checked recently and should skip this round. */
+function recentlyChecked(): boolean {
+  try {
+    const age = Date.now() - statSync(lastCheckPath()).mtimeMs;
+    return age < CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** Touch the last-check file so the next call respects the TTL. */
+function touchLastCheck(): void {
+  const path = lastCheckPath();
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync(path)) {
+      const now = Date.now() / 1000;
+      utimesSync(path, now, now);
+    } else {
+      writeFileSync(path, "");
+    }
+  } catch {
+    /* non-fatal — at worst we spawn next session too */
+  }
+}
+
 /**
- * Run an autoupdate check + apply. Best-effort: never throws, never
- * blocks past `timeoutMs`. Returns nothing — the session-start hook
- * should not branch on the outcome (it's purely a side channel).
+ * Trigger an autoupdate check. Best-effort, fire-and-forget. Returns
+ * synchronously (sub-50ms) — never blocks the session-start hook on
+ * network or subprocess I/O.
+ *
+ * The actual upgrade work (npm install -g + re-exec install) happens
+ * inside the detached `hivemind update` process. If that process
+ * upgrades the install, the user sees the new version on the NEXT
+ * session start (when `getInstalledVersion()` reads the freshly-
+ * upgraded plugin.json).
+ *
+ * Returns void; declared async so the call sites can `await` it
+ * without changing their structure (the await is a no-op functionally
+ * but makes the call site uniform with other async hook helpers).
  */
 export async function autoUpdate(
   creds: Credentials | null,
   opts: AutoUpdateOpts,
 ): Promise<void> {
+  const t0 = Date.now();
   log(`agent=${opts.agent} entered`);
-  if (!creds?.token) { log(`agent=${opts.agent} skip: no creds.token`); return; }
-  if (creds.autoupdate === false) { log(`agent=${opts.agent} skip: autoupdate=false`); return; }
+  if (!creds?.token) { log(`agent=${opts.agent} skip: no creds.token (${Date.now() - t0}ms)`); return; }
+  if (creds.autoupdate === false) { log(`agent=${opts.agent} skip: autoupdate=false (${Date.now() - t0}ms)`); return; }
 
-  const stderr = opts.stderr ?? defaultStderr;
-  const timeoutMs = opts.timeoutMs ?? 90_000;
+  // Cache: we check at most once per CACHE_TTL_MS to avoid spawning a
+  // process on every session-start. Tests can pass `skipCache: true` to
+  // force the spawn.
+  if (!opts.skipCache && recentlyChecked()) {
+    log(`agent=${opts.agent} skip: checked recently (within ${CACHE_TTL_MS / 60_000}min) (${Date.now() - t0}ms)`);
+    return;
+  }
 
   const binaryPath = opts.hivemindBinaryPath !== undefined
     ? opts.hivemindBinaryPath
-    : await findHivemindOnPath();
-  if (!binaryPath) { log(`agent=${opts.agent} skip: hivemind binary not on PATH`); return; }
+    : findHivemindOnPath();
+  if (!binaryPath) { log(`agent=${opts.agent} skip: hivemind binary not on PATH (${Date.now() - t0}ms)`); return; }
 
-  // Machine-wide lock: only one `hivemind update` may be in flight at
-  // once, across all agents on the host. If another process holds it,
-  // skip — the next session-start will retry.
-  const lock = opts.skipLock ? "noop" : tryAcquireLock();
-  if (!lock) { log(`agent=${opts.agent} skip: another autoupdate in flight`); return; }
-  log(`agent=${opts.agent} binary=${binaryPath} → spawning update (lock=${lock})`);
-
+  log(`agent=${opts.agent} binary=${binaryPath} → dispatching detached update`);
   const spawnFn = opts.spawn ?? defaultSpawn;
-  let result: SpawnResult;
+  let pid: number | undefined;
   try {
-    try {
-      result = await spawnFn(binaryPath, ["update"], timeoutMs);
-    } catch (e: any) {
-      log(`agent=${opts.agent} spawn threw: ${e?.message ?? e}`);
-      return;
-    }
-  } finally {
-    if (lock !== "noop") releaseLock(lock);
-  }
-  log(`agent=${opts.agent} spawn done: code=${result.code} stdout=${result.stdout.length}B stderr=${result.stderr.length}B`);
-
-  // Treat unrecognized output (e.g. "Unknown command: update" from a
-  // pre-PR-#91 binary) as silent — we don't surface command-not-found
-  // noise to users who happen to have an older `hivemind` on PATH.
-  if (result.code !== 0 && !/Update available/.test(result.stderr + result.stdout)) {
+    pid = spawnFn(binaryPath, ["update"]).pid;
+  } catch (e: any) {
+    log(`agent=${opts.agent} dispatch threw: ${e?.message ?? e} (${Date.now() - t0}ms)`);
     return;
   }
-  const summary = extractUpdateSummary(result.stdout + "\n" + result.stderr);
-  if (!summary) return;
-
-  // Surface upgrade outcomes; suppress "is up to date" (common case,
-  // would spam stderr on every session-start).
-  if (/Updated to/.test(summary)) {
-    stderr(`✅ Hivemind ${summary} ${RESTART_HINT[opts.agent]}\n`);
-  } else if (/Update available/.test(summary)) {
-    stderr(`⬆️ Hivemind: ${summary}\n`);
-  }
+  // Mark the check timestamp BEFORE we know whether the spawned process
+  // succeeds — the goal of the cache is "rate-limit our trigger", not
+  // "rate-limit successful updates". Even if the spawned process fails,
+  // it'll fail on every session-start within the TTL window without the
+  // touch.
+  touchLastCheck();
+  log(`agent=${opts.agent} dispatched (pid=${pid ?? "?"}) (${Date.now() - t0}ms total)`);
 }

@@ -54,7 +54,7 @@ var init_index_marker_store = __esm({
 
 // dist/src/hooks/session-start.js
 import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join8 } from "node:path";
+import { dirname as dirname3, join as join8 } from "node:path";
 import { homedir as homedir5 } from "node:os";
 
 // dist/src/commands/auth.js
@@ -615,138 +615,92 @@ function makeWikiLogger(hooksDir, filename = "deeplake-wiki.log") {
 }
 
 // dist/src/hooks/shared/autoupdate.js
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { openSync, closeSync, statSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync as existsSync3, statSync, utimesSync, writeFileSync as writeFileSync3, mkdirSync as mkdirSync4 } from "node:fs";
+import { dirname as dirname2, join as join7 } from "node:path";
 import { homedir as homedir4 } from "node:os";
-var execFileAsync = promisify(execFile);
 var log3 = (msg) => log("autoupdate", msg);
-function lockPath() {
-  return join7(homedir4(), ".deeplake", ".autoupdate.lock");
+function lastCheckPath() {
+  return join7(homedir4(), ".deeplake", ".autoupdate-last-check");
 }
-var LOCK_STALE_MS = 5 * 6e4;
-var RESTART_HINT = {
-  claude: "Run /reload-plugins to apply.",
-  codex: "Restart Codex to apply.",
-  cursor: "Restart Cursor to apply.",
-  hermes: "Restart Hermes to apply.",
-  pi: "Restart pi to apply.",
-  openclaw: "Restart OpenClaw to apply."
+var CACHE_TTL_MS = 4 * 60 * 6e4;
+var defaultSpawn = (cmd, args) => {
+  const child = spawn(cmd, args, {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  child.on("error", () => {
+  });
+  return { pid: child.pid };
 };
-var defaultStderr = (msg) => process.stderr.write(msg);
-var defaultSpawn = (cmd, args, timeoutMs) => new Promise((resolve) => {
-  const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (d) => {
-    stdout += d.toString();
-  });
-  child.stderr.on("data", (d) => {
-    stderr += d.toString();
-  });
-  child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
-  child.on("error", () => resolve({ stdout, stderr, code: 1 }));
-});
-async function findHivemindOnPath() {
-  try {
-    const { stdout } = await execFileAsync("which", ["hivemind"], { timeout: 2e3 });
-    const path = stdout.trim();
-    return path.length > 0 ? path : null;
-  } catch {
-    return null;
-  }
-}
-function tryAcquireLock() {
-  const path = lockPath();
-  try {
-    const age = Date.now() - statSync(path).mtimeMs;
-    if (age > LOCK_STALE_MS) {
-      log3(`stale lock (${Math.round(age / 1e3)}s old) \u2014 clearing`);
-      unlinkSync2(path);
-    }
-  } catch {
-  }
-  try {
-    const fd = openSync(path, "wx");
-    writeFileSync3(path, `${process.pid}
-`);
-    closeSync(fd);
-    return path;
-  } catch {
-    return null;
-  }
-}
-function releaseLock(path) {
-  try {
-    unlinkSync2(path);
-  } catch {
-  }
-}
-function extractUpdateSummary(combined) {
-  const lines = combined.split(/\r?\n/);
-  for (const re of [/Updated to .+\./, /Update available: .+/, /is up to date/]) {
-    const hit = lines.map((l) => l.trim()).find((l) => re.test(l));
-    if (hit)
-      return hit;
+function findHivemindOnPath() {
+  const PATH = process.env.PATH ?? "";
+  const dirs = PATH.split(":").filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = join7(dir, "hivemind");
+    if (existsSync3(candidate))
+      return candidate;
   }
   return null;
 }
+function recentlyChecked() {
+  try {
+    const age = Date.now() - statSync(lastCheckPath()).mtimeMs;
+    return age < CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+function touchLastCheck() {
+  const path = lastCheckPath();
+  try {
+    mkdirSync4(dirname2(path), { recursive: true });
+    if (existsSync3(path)) {
+      const now = Date.now() / 1e3;
+      utimesSync(path, now, now);
+    } else {
+      writeFileSync3(path, "");
+    }
+  } catch {
+  }
+}
 async function autoUpdate(creds, opts) {
+  const t0 = Date.now();
   log3(`agent=${opts.agent} entered`);
   if (!creds?.token) {
-    log3(`agent=${opts.agent} skip: no creds.token`);
+    log3(`agent=${opts.agent} skip: no creds.token (${Date.now() - t0}ms)`);
     return;
   }
   if (creds.autoupdate === false) {
-    log3(`agent=${opts.agent} skip: autoupdate=false`);
+    log3(`agent=${opts.agent} skip: autoupdate=false (${Date.now() - t0}ms)`);
     return;
   }
-  const stderr = opts.stderr ?? defaultStderr;
-  const timeoutMs = opts.timeoutMs ?? 9e4;
-  const binaryPath = opts.hivemindBinaryPath !== void 0 ? opts.hivemindBinaryPath : await findHivemindOnPath();
+  if (!opts.skipCache && recentlyChecked()) {
+    log3(`agent=${opts.agent} skip: checked recently (within ${CACHE_TTL_MS / 6e4}min) (${Date.now() - t0}ms)`);
+    return;
+  }
+  const binaryPath = opts.hivemindBinaryPath !== void 0 ? opts.hivemindBinaryPath : findHivemindOnPath();
   if (!binaryPath) {
-    log3(`agent=${opts.agent} skip: hivemind binary not on PATH`);
+    log3(`agent=${opts.agent} skip: hivemind binary not on PATH (${Date.now() - t0}ms)`);
     return;
   }
-  const lock = opts.skipLock ? "noop" : tryAcquireLock();
-  if (!lock) {
-    log3(`agent=${opts.agent} skip: another autoupdate in flight`);
-    return;
-  }
-  log3(`agent=${opts.agent} binary=${binaryPath} \u2192 spawning update (lock=${lock})`);
+  log3(`agent=${opts.agent} binary=${binaryPath} \u2192 dispatching detached update`);
   const spawnFn = opts.spawn ?? defaultSpawn;
-  let result;
+  let pid;
   try {
-    try {
-      result = await spawnFn(binaryPath, ["update"], timeoutMs);
-    } catch (e) {
-      log3(`agent=${opts.agent} spawn threw: ${e?.message ?? e}`);
-      return;
-    }
-  } finally {
-    if (lock !== "noop")
-      releaseLock(lock);
-  }
-  log3(`agent=${opts.agent} spawn done: code=${result.code} stdout=${result.stdout.length}B stderr=${result.stderr.length}B`);
-  if (result.code !== 0 && !/Update available/.test(result.stderr + result.stdout)) {
+    pid = spawnFn(binaryPath, ["update"]).pid;
+  } catch (e) {
+    log3(`agent=${opts.agent} dispatch threw: ${e?.message ?? e} (${Date.now() - t0}ms)`);
     return;
   }
-  const summary = extractUpdateSummary(result.stdout + "\n" + result.stderr);
-  if (!summary)
-    return;
-  if (/Updated to/.test(summary)) {
-    stderr(`\u2705 Hivemind ${summary} ${RESTART_HINT[opts.agent]}
-`);
-  } else if (/Update available/.test(summary)) {
-    stderr(`\u2B06\uFE0F Hivemind: ${summary}
-`);
-  }
+  touchLastCheck();
+  log3(`agent=${opts.agent} dispatched (pid=${pid ?? "?"}) (${Date.now() - t0}ms total)`);
 }
 
 // dist/src/hooks/session-start.js
 var log4 = (msg) => log("session-start", msg);
-var __bundleDir = dirname2(fileURLToPath(import.meta.url));
+var __bundleDir = dirname3(fileURLToPath(import.meta.url));
 var AUTH_CMD = join8(__bundleDir, "commands", "auth-login.js");
 var context = `DEEPLAKE MEMORY: You have TWO memory sources. ALWAYS check BOTH when the user asks you to recall, remember, or look up ANY information:
 
@@ -811,6 +765,8 @@ async function createPlaceholder(api, table, sessionId, cwd, userName, orgName, 
 async function main() {
   if (process.env.HIVEMIND_WIKI_WORKER === "1")
     return;
+  const __hookT0 = Date.now();
+  log4(`hook entered (pid=${process.pid})`);
   const input = await readStdin();
   let creds = loadCredentials();
   if (!creds?.token) {
@@ -866,6 +822,7 @@ Logged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${cred
       additionalContext
     }
   }));
+  log4(`hook done (${Date.now() - __hookT0}ms total)`);
 }
 main().catch((e) => {
   log4(`fatal: ${e.message}`);

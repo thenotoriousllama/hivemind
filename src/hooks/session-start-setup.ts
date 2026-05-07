@@ -8,18 +8,16 @@
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { loadCredentials, saveCredentials } from "../commands/auth.js";
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { readStdin } from "../utils/stdin.js";
 import { log as _log } from "../utils/debug.js";
-import { getInstalledVersion, getLatestVersion, isNewer } from "../utils/version-check.js";
 import { makeWikiLogger } from "../utils/wiki-log.js";
-import { resolveVersionedPluginDir, snapshotPluginDir, restoreOrCleanup } from "../utils/plugin-cache.js";
 import { EmbedClient } from "../embeddings/client.js";
 import { embeddingsDisabled, embeddingsStatus } from "../embeddings/disable.js";
+import { autoUpdate } from "./shared/autoupdate.js";
 const log = (msg: string) => _log("session-setup", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +45,13 @@ async function main(): Promise<void> {
     } catch { /* non-fatal */ }
   }
 
+  // Centralized autoupdate fires BEFORE the DB ensure-table calls — those
+  // can stall for tens of seconds against a slow/unreachable backend, and
+  // autoUpdate has zero dependency on table state. The 4h cache means this
+  // is a near-instant no-op when session-start.ts already fired the
+  // helper microseconds earlier.
+  await autoUpdate(creds, { agent: "claude" });
+
   if (input.session_id) {
     try {
       const config = loadConfig();
@@ -60,50 +65,6 @@ async function main(): Promise<void> {
       log(`setup failed: ${e.message}`);
       wikiLog(`SessionSetup: failed for ${input.session_id}: ${e.message}`);
     }
-  }
-
-  // Version check + auto-update
-  const autoupdate = creds.autoupdate !== false;
-  try {
-    const current = getInstalledVersion(__bundleDir, ".claude-plugin");
-    if (current) {
-      const latest = await getLatestVersion();
-      if (latest && isNewer(latest, current)) {
-        if (autoupdate) {
-          log(`autoupdate: updating ${current} → ${latest}`);
-          // Claude's installer deletes the old version directory, which
-          // invalidates the bundle paths baked into the *current* session's
-          // hook registry. Snapshot the dir first, restore it if the
-          // installer wiped it — so already-loaded hooks keep working
-          // until the session exits. Only applies to a real versioned
-          // install layout; a local --plugin-dir dev run is skipped.
-          const resolved = resolveVersionedPluginDir(__bundleDir);
-          const handle = resolved ? snapshotPluginDir(resolved.pluginDir) : null;
-          try {
-            const scopes = ["user", "project", "local", "managed"];
-            const cmd = scopes
-              .map(s => `claude plugin update hivemind@hivemind --scope ${s} 2>/dev/null || true`)
-              .join("; ");
-            execSync(cmd, { stdio: "ignore", timeout: 60_000 });
-            const outcome = restoreOrCleanup(handle);
-            log(`autoupdate snapshot outcome: ${outcome}`);
-            process.stderr.write(`✅ Hivemind auto-updated: ${current} → ${latest}. Run /reload-plugins to apply.\n`);
-            log(`autoupdate succeeded: ${current} → ${latest}`);
-          } catch (e: any) {
-            restoreOrCleanup(handle);
-            process.stderr.write(`⬆️ Hivemind update available: ${current} → ${latest}. Auto-update failed — run /hivemind:update to upgrade manually.\n`);
-            log(`autoupdate failed: ${e.message}`);
-          }
-        } else {
-          process.stderr.write(`⬆️ Hivemind update available: ${current} → ${latest}. Run /hivemind:update to upgrade.\n`);
-          log(`update available (autoupdate off): ${current} → ${latest}`);
-        }
-      } else {
-        log(`version up to date: ${current}`);
-      }
-    }
-  } catch (e: any) {
-    log(`version check failed: ${e.message}`);
   }
 
   // Warm up the embedding daemon so the nomic-embed-text-v1.5 model is

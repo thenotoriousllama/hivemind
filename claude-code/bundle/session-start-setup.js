@@ -54,8 +54,7 @@ var init_index_marker_store = __esm({
 
 // dist/src/hooks/session-start-setup.js
 import { fileURLToPath } from "node:url";
-import { dirname as dirname3, join as join10 } from "node:path";
-import { execSync as execSync2 } from "node:child_process";
+import { dirname as dirname2, join as join9 } from "node:path";
 import { homedir as homedir7 } from "node:os";
 
 // dist/src/commands/auth.js
@@ -179,7 +178,7 @@ var BASE_DELAY_MS = 500;
 var MAX_CONCURRENCY = 5;
 var QUERY_TIMEOUT_MS = Number(process.env.HIVEMIND_QUERY_TIMEOUT_MS ?? 1e4);
 function sleep(ms) {
-  return new Promise((resolve2) => setTimeout(resolve2, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function isTimeoutError(error) {
   const name = error instanceof Error ? error.name.toLowerCase() : "";
@@ -209,7 +208,7 @@ var Semaphore = class {
       this.active++;
       return;
     }
-    await new Promise((resolve2) => this.waiting.push(resolve2));
+    await new Promise((resolve) => this.waiting.push(resolve));
   }
   release() {
     this.active--;
@@ -540,13 +539,13 @@ var DeeplakeApi = class {
 
 // dist/src/utils/stdin.js
 function readStdin() {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve, reject) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => {
       try {
-        resolve2(JSON.parse(data));
+        resolve(JSON.parse(data));
       } catch (err) {
         reject(new Error(`Failed to parse hook input: ${err}`));
       }
@@ -555,71 +554,11 @@ function readStdin() {
   });
 }
 
-// dist/src/utils/version-check.js
-import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname, join as join5 } from "node:path";
-var GITHUB_RAW_PKG = "https://raw.githubusercontent.com/activeloopai/hivemind/main/package.json";
-function getInstalledVersion(bundleDir, pluginManifestDir) {
-  try {
-    const pluginJson = join5(bundleDir, "..", pluginManifestDir, "plugin.json");
-    const plugin = JSON.parse(readFileSync4(pluginJson, "utf-8"));
-    if (plugin.version)
-      return plugin.version;
-  } catch {
-  }
-  try {
-    const stamp = readFileSync4(join5(bundleDir, "..", ".hivemind_version"), "utf-8").trim();
-    if (stamp)
-      return stamp;
-  } catch {
-  }
-  const HIVEMIND_PKG_NAMES = /* @__PURE__ */ new Set([
-    "hivemind",
-    "hivemind-codex",
-    "@deeplake/hivemind",
-    "@deeplake/hivemind-codex",
-    "@activeloop/hivemind",
-    "@activeloop/hivemind-codex"
-  ]);
-  let dir = bundleDir;
-  for (let i = 0; i < 5; i++) {
-    const candidate = join5(dir, "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync4(candidate, "utf-8"));
-      if (HIVEMIND_PKG_NAMES.has(pkg.name) && pkg.version)
-        return pkg.version;
-    } catch {
-    }
-    const parent = dirname(dir);
-    if (parent === dir)
-      break;
-    dir = parent;
-  }
-  return null;
-}
-async function getLatestVersion(timeoutMs = 3e3) {
-  try {
-    const res = await fetch(GITHUB_RAW_PKG, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok)
-      return null;
-    const pkg = await res.json();
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-function isNewer(latest, current) {
-  const parse = (v) => v.split(".").map(Number);
-  const [la, lb, lc] = parse(latest);
-  const [ca, cb, cc] = parse(current);
-  return la > ca || la === ca && lb > cb || la === ca && lb === cb && lc > cc;
-}
-
 // dist/src/utils/wiki-log.js
 import { mkdirSync as mkdirSync3, appendFileSync as appendFileSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join5 } from "node:path";
 function makeWikiLogger(hooksDir, filename = "deeplake-wiki.log") {
-  const path = join6(hooksDir, filename);
+  const path = join5(hooksDir, filename);
   return {
     path,
     log(msg) {
@@ -633,73 +572,12 @@ function makeWikiLogger(hooksDir, filename = "deeplake-wiki.log") {
   };
 }
 
-// dist/src/utils/plugin-cache.js
-import { cpSync, existsSync as existsSync3, readdirSync, readFileSync as readFileSync5, renameSync, rmSync, statSync } from "node:fs";
-import { basename, dirname as dirname2, join as join7, resolve, sep } from "node:path";
-import { homedir as homedir4 } from "node:os";
-var SEMVER_RE = /^\d+\.\d+\.\d+$/;
-function isSemver(name) {
-  return SEMVER_RE.test(name);
-}
-function resolveVersionedPluginDir(bundleDir) {
-  const pluginDir = dirname2(bundleDir);
-  const versionsRoot = dirname2(pluginDir);
-  const version = basename(pluginDir);
-  if (!isSemver(version))
-    return null;
-  if (basename(versionsRoot) !== "hivemind")
-    return null;
-  const expectedPrefix = resolve(homedir4(), ".claude", "plugins", "cache") + sep;
-  if (!resolve(versionsRoot).startsWith(expectedPrefix))
-    return null;
-  return { pluginDir, versionsRoot, version };
-}
-function snapshotPath(pluginDir, pid) {
-  return `${pluginDir}.keep-${pid}`;
-}
-function snapshotPluginDir(pluginDir, pid = process.pid) {
-  if (!existsSync3(pluginDir))
-    return null;
-  const snapshot = snapshotPath(pluginDir, pid);
-  try {
-    rmSync(snapshot, { recursive: true, force: true });
-    cpSync(pluginDir, snapshot, { recursive: true, dereference: false });
-    return { pluginDir, snapshot };
-  } catch {
-    return null;
-  }
-}
-function restoreOrCleanup(handle) {
-  if (!handle)
-    return "noop";
-  const { pluginDir, snapshot } = handle;
-  try {
-    if (!existsSync3(pluginDir)) {
-      if (existsSync3(snapshot)) {
-        renameSync(snapshot, pluginDir);
-        return "restored";
-      }
-      return "noop";
-    }
-    rmSync(snapshot, { recursive: true, force: true });
-    return "cleaned";
-  } catch (e) {
-    try {
-      process.stderr.write(`[plugin-cache] restoreOrCleanup failed for ${pluginDir}: ${e?.message}
-`);
-    } catch {
-    }
-    return "restore-failed";
-  }
-}
-var DEFAULT_MANIFEST_PATH = join7(homedir4(), ".claude", "plugins", "installed_plugins.json");
-
 // dist/src/embeddings/client.js
 import { connect } from "node:net";
 import { spawn } from "node:child_process";
-import { openSync, closeSync, writeSync, unlinkSync as unlinkSync2, existsSync as existsSync4, readFileSync as readFileSync6 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join8 } from "node:path";
+import { openSync, closeSync, writeSync, unlinkSync as unlinkSync2, existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join6 } from "node:path";
 
 // dist/src/embeddings/protocol.js
 var DEFAULT_SOCKET_DIR = "/tmp";
@@ -713,7 +591,7 @@ function pidPathFor(uid, dir = DEFAULT_SOCKET_DIR) {
 }
 
 // dist/src/embeddings/client.js
-var SHARED_DAEMON_PATH = join8(homedir5(), ".hivemind", "embed-deps", "embed-daemon.js");
+var SHARED_DAEMON_PATH = join6(homedir4(), ".hivemind", "embed-deps", "embed-daemon.js");
 var log3 = (m) => log("embed-client", m);
 function getUid() {
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
@@ -733,7 +611,7 @@ var EmbedClient = class {
     this.socketPath = socketPathFor(uid, dir);
     this.pidPath = pidPathFor(uid, dir);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_CLIENT_TIMEOUT_MS;
-    this.daemonEntry = opts.daemonEntry ?? process.env.HIVEMIND_EMBED_DAEMON ?? (existsSync4(SHARED_DAEMON_PATH) ? SHARED_DAEMON_PATH : void 0);
+    this.daemonEntry = opts.daemonEntry ?? process.env.HIVEMIND_EMBED_DAEMON ?? (existsSync3(SHARED_DAEMON_PATH) ? SHARED_DAEMON_PATH : void 0);
     this.autoSpawn = opts.autoSpawn ?? true;
     this.spawnWaitMs = opts.spawnWaitMs ?? 5e3;
   }
@@ -796,7 +674,7 @@ var EmbedClient = class {
     }
   }
   connectOnce() {
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve, reject) => {
       const sock = connect(this.socketPath);
       const to = setTimeout(() => {
         sock.destroy();
@@ -804,7 +682,7 @@ var EmbedClient = class {
       }, this.timeoutMs);
       sock.once("connect", () => {
         clearTimeout(to);
-        resolve2(sock);
+        resolve(sock);
       });
       sock.once("error", (e) => {
         clearTimeout(to);
@@ -833,7 +711,7 @@ var EmbedClient = class {
         return;
       }
     }
-    if (!this.daemonEntry || !existsSync4(this.daemonEntry)) {
+    if (!this.daemonEntry || !existsSync3(this.daemonEntry)) {
       log3(`daemonEntry not configured or missing: ${this.daemonEntry}`);
       try {
         closeSync(fd);
@@ -856,7 +734,7 @@ var EmbedClient = class {
   }
   isPidFileStale() {
     try {
-      const raw = readFileSync6(this.pidPath, "utf-8").trim();
+      const raw = readFileSync4(this.pidPath, "utf-8").trim();
       const pid = Number(raw);
       if (!pid || Number.isNaN(pid))
         return true;
@@ -876,7 +754,7 @@ var EmbedClient = class {
     while (Date.now() < deadline) {
       await sleep2(delay);
       delay = Math.min(delay * 1.5, 300);
-      if (!existsSync4(this.socketPath))
+      if (!existsSync3(this.socketPath))
         continue;
       try {
         return await this.connectOnce();
@@ -886,7 +764,7 @@ var EmbedClient = class {
     throw new Error("daemon did not become ready within spawnWaitMs");
   }
   sendAndWait(sock, req) {
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve, reject) => {
       let buf = "";
       const to = setTimeout(() => {
         sock.destroy();
@@ -901,7 +779,7 @@ var EmbedClient = class {
         const line = buf.slice(0, nl);
         clearTimeout(to);
         try {
-          resolve2(JSON.parse(line));
+          resolve(JSON.parse(line));
         } catch (e) {
           reject(e);
         }
@@ -924,8 +802,8 @@ function sleep2(ms) {
 
 // dist/src/embeddings/disable.js
 import { createRequire } from "node:module";
-import { homedir as homedir6 } from "node:os";
-import { join as join9 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { join as join7 } from "node:path";
 import { pathToFileURL } from "node:url";
 var cachedStatus = null;
 function defaultResolveTransformers() {
@@ -934,7 +812,7 @@ function defaultResolveTransformers() {
     return;
   } catch {
   }
-  const sharedDir = join9(homedir6(), ".hivemind", "embed-deps");
+  const sharedDir = join7(homedir5(), ".hivemind", "embed-deps");
   createRequire(pathToFileURL(`${sharedDir}/`).href).resolve("@huggingface/transformers");
 }
 var _resolve = defaultResolveTransformers;
@@ -958,17 +836,101 @@ function embeddingsDisabled() {
   return embeddingsStatus() !== "enabled";
 }
 
+// dist/src/hooks/shared/autoupdate.js
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync4, statSync, utimesSync, writeFileSync as writeFileSync3, mkdirSync as mkdirSync4 } from "node:fs";
+import { dirname, join as join8 } from "node:path";
+import { homedir as homedir6 } from "node:os";
+var log4 = (msg) => log("autoupdate", msg);
+function lastCheckPath() {
+  return join8(homedir6(), ".deeplake", ".autoupdate-last-check");
+}
+var CACHE_TTL_MS = 4 * 60 * 6e4;
+var defaultSpawn = (cmd, args) => {
+  const child = spawn2(cmd, args, {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  child.on("error", () => {
+  });
+  return { pid: child.pid };
+};
+function findHivemindOnPath() {
+  const PATH = process.env.PATH ?? "";
+  const dirs = PATH.split(":").filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = join8(dir, "hivemind");
+    if (existsSync4(candidate))
+      return candidate;
+  }
+  return null;
+}
+function recentlyChecked() {
+  try {
+    const age = Date.now() - statSync(lastCheckPath()).mtimeMs;
+    return age < CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+function touchLastCheck() {
+  const path = lastCheckPath();
+  try {
+    mkdirSync4(dirname(path), { recursive: true });
+    if (existsSync4(path)) {
+      const now = Date.now() / 1e3;
+      utimesSync(path, now, now);
+    } else {
+      writeFileSync3(path, "");
+    }
+  } catch {
+  }
+}
+async function autoUpdate(creds, opts) {
+  const t0 = Date.now();
+  log4(`agent=${opts.agent} entered`);
+  if (!creds?.token) {
+    log4(`agent=${opts.agent} skip: no creds.token (${Date.now() - t0}ms)`);
+    return;
+  }
+  if (creds.autoupdate === false) {
+    log4(`agent=${opts.agent} skip: autoupdate=false (${Date.now() - t0}ms)`);
+    return;
+  }
+  if (!opts.skipCache && recentlyChecked()) {
+    log4(`agent=${opts.agent} skip: checked recently (within ${CACHE_TTL_MS / 6e4}min) (${Date.now() - t0}ms)`);
+    return;
+  }
+  const binaryPath = opts.hivemindBinaryPath !== void 0 ? opts.hivemindBinaryPath : findHivemindOnPath();
+  if (!binaryPath) {
+    log4(`agent=${opts.agent} skip: hivemind binary not on PATH (${Date.now() - t0}ms)`);
+    return;
+  }
+  log4(`agent=${opts.agent} binary=${binaryPath} \u2192 dispatching detached update`);
+  const spawnFn = opts.spawn ?? defaultSpawn;
+  let pid;
+  try {
+    pid = spawnFn(binaryPath, ["update"]).pid;
+  } catch (e) {
+    log4(`agent=${opts.agent} dispatch threw: ${e?.message ?? e} (${Date.now() - t0}ms)`);
+    return;
+  }
+  touchLastCheck();
+  log4(`agent=${opts.agent} dispatched (pid=${pid ?? "?"}) (${Date.now() - t0}ms total)`);
+}
+
 // dist/src/hooks/session-start-setup.js
-var log4 = (msg) => log("session-setup", msg);
-var __bundleDir = dirname3(fileURLToPath(import.meta.url));
-var { log: wikiLog } = makeWikiLogger(join10(homedir7(), ".claude", "hooks"));
+var log5 = (msg) => log("session-setup", msg);
+var __bundleDir = dirname2(fileURLToPath(import.meta.url));
+var { log: wikiLog } = makeWikiLogger(join9(homedir7(), ".claude", "hooks"));
 async function main() {
   if (process.env.HIVEMIND_WIKI_WORKER === "1")
     return;
   const input = await readStdin();
   const creds = loadCredentials();
   if (!creds?.token) {
-    log4("no credentials");
+    log5("no credentials");
     return;
   }
   if (!creds.userName) {
@@ -976,10 +938,11 @@ async function main() {
       const { userInfo: userInfo2 } = await import("node:os");
       creds.userName = userInfo2().username ?? "unknown";
       saveCredentials(creds);
-      log4(`backfilled userName: ${creds.userName}`);
+      log5(`backfilled userName: ${creds.userName}`);
     } catch {
     }
   }
+  await autoUpdate(creds, { agent: "claude" });
   if (input.session_id) {
     try {
       const config = loadConfig();
@@ -987,68 +950,31 @@ async function main() {
         const api = new DeeplakeApi(config.token, config.apiUrl, config.orgId, config.workspaceId, config.tableName);
         await api.ensureTable();
         await api.ensureSessionsTable(config.sessionsTableName);
-        log4("setup complete");
+        log5("setup complete");
       }
     } catch (e) {
-      log4(`setup failed: ${e.message}`);
+      log5(`setup failed: ${e.message}`);
       wikiLog(`SessionSetup: failed for ${input.session_id}: ${e.message}`);
     }
-  }
-  const autoupdate = creds.autoupdate !== false;
-  try {
-    const current = getInstalledVersion(__bundleDir, ".claude-plugin");
-    if (current) {
-      const latest = await getLatestVersion();
-      if (latest && isNewer(latest, current)) {
-        if (autoupdate) {
-          log4(`autoupdate: updating ${current} \u2192 ${latest}`);
-          const resolved = resolveVersionedPluginDir(__bundleDir);
-          const handle = resolved ? snapshotPluginDir(resolved.pluginDir) : null;
-          try {
-            const scopes = ["user", "project", "local", "managed"];
-            const cmd = scopes.map((s) => `claude plugin update hivemind@hivemind --scope ${s} 2>/dev/null || true`).join("; ");
-            execSync2(cmd, { stdio: "ignore", timeout: 6e4 });
-            const outcome = restoreOrCleanup(handle);
-            log4(`autoupdate snapshot outcome: ${outcome}`);
-            process.stderr.write(`\u2705 Hivemind auto-updated: ${current} \u2192 ${latest}. Run /reload-plugins to apply.
-`);
-            log4(`autoupdate succeeded: ${current} \u2192 ${latest}`);
-          } catch (e) {
-            restoreOrCleanup(handle);
-            process.stderr.write(`\u2B06\uFE0F Hivemind update available: ${current} \u2192 ${latest}. Auto-update failed \u2014 run /hivemind:update to upgrade manually.
-`);
-            log4(`autoupdate failed: ${e.message}`);
-          }
-        } else {
-          process.stderr.write(`\u2B06\uFE0F Hivemind update available: ${current} \u2192 ${latest}. Run /hivemind:update to upgrade.
-`);
-          log4(`update available (autoupdate off): ${current} \u2192 ${latest}`);
-        }
-      } else {
-        log4(`version up to date: ${current}`);
-      }
-    }
-  } catch (e) {
-    log4(`version check failed: ${e.message}`);
   }
   if (embeddingsDisabled()) {
     const status = embeddingsStatus();
     const reason = status === "no-transformers" ? "@huggingface/transformers not installed (see README to enable embeddings)" : "HIVEMIND_EMBEDDINGS=false";
-    log4(`embed daemon warmup skipped: ${reason}`);
+    log5(`embed daemon warmup skipped: ${reason}`);
   } else if (process.env.HIVEMIND_EMBED_WARMUP !== "false") {
     try {
-      const daemonEntry = join10(__bundleDir, "embeddings", "embed-daemon.js");
+      const daemonEntry = join9(__bundleDir, "embeddings", "embed-daemon.js");
       const client = new EmbedClient({ daemonEntry, timeoutMs: 300, spawnWaitMs: 5e3 });
       const ok = await client.warmup();
-      log4(`embed daemon warmup: ${ok ? "ok" : "failed"}`);
+      log5(`embed daemon warmup: ${ok ? "ok" : "failed"}`);
     } catch (e) {
-      log4(`embed daemon warmup threw: ${e.message}`);
+      log5(`embed daemon warmup threw: ${e.message}`);
     }
   } else {
-    log4("embed daemon warmup skipped via HIVEMIND_EMBED_WARMUP=false");
+    log5("embed daemon warmup skipped via HIVEMIND_EMBED_WARMUP=false");
   }
 }
 main().catch((e) => {
-  log4(`fatal: ${e.message}`);
+  log5(`fatal: ${e.message}`);
   process.exit(0);
 });
