@@ -129,3 +129,107 @@ jobs:
           name: "${{ steps.version.outputs.version }} — ${{ steps.pr.outputs.title }}"
           body: ${{ steps.pr.outputs.body }}
           generate_release_notes: false
+
+  publish:
+    # Publish @deeplake/hivemind to npm and the openclaw bundle to ClawHub.
+    # Runs only on the bump-commit retrigger (so we publish exactly the
+    # version that was just released to GitHub) and pauses at the
+    # `production` environment gate for human approval before tokens are
+    # accessible. Tokens live as environment-scoped secrets, so PRs from
+    # forks and unprotected branches cannot reach them.
+    name: Publish to npm + ClawHub
+    needs: release
+    if: "${{ startsWith(github.event.head_commit.message, 'chore: bump version') }}"
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: hivemind-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Pull the latest main HEAD: the push event's SHA may point at
+          # the pre-bump commit, but the `release` job above just pushed
+          # the bump commit — that's the version we want to publish.
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.12'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@deeplake'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Quality gate (typecheck + duplication + test)
+        # Belt-and-braces: ci.yml already gates merges to main, but a
+        # publish job that doesn't re-run the gate could ship if someone
+        # disables a CI status check.
+        run: npm run ci
+
+      - name: Build bundles
+        run: npm run build
+
+      - name: Pack-check (refuse forbidden filenames in tarball)
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e "
+            const entries = JSON.parse(require('fs').readFileSync('/tmp/pack.json','utf8'))[0].files.map(f => f.path);
+            const forbidden = entries.filter(p =>
+              /(^|\/)\.npmrc$/.test(p) ||
+              /(^|\/)\.env(\$|\.)/.test(p) ||
+              /(^|\/)secrets?(\/|\$)/.test(p) ||
+              /(^|\/)\.github(\/|\$)/.test(p) ||
+              /(^|\/)\.git(\/|\$)/.test(p)
+            );
+            if (forbidden.length) {
+              console.error('Refusing to publish — forbidden filenames in tarball:');
+              for (const f of forbidden) console.error('  ' + f);
+              process.exit(1);
+            }
+            console.log('Pack-check OK — ' + entries.length + ' files, no forbidden patterns');
+          "
+
+      - name: Publish to npm with Sigstore provenance
+        # --provenance uses the GitHub OIDC token (id-token: write above)
+        # to sign the artifact via Sigstore. Even if NPM_TOKEN later leaks,
+        # consumers can verify the package was built by THIS workflow on
+        # THIS commit, and npmjs.com displays a Provenance badge.
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub
+
+      - name: Authenticate ClawHub CLI
+        # `clawhub login --token` writes a credential file inside the
+        # runner's $HOME, which is ephemeral and discarded when the job
+        # ends. The token only ever appears as ${{ secrets.* }}, which
+        # GitHub auto-masks in logs.
+        run: clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+
+      - name: Publish openclaw bundle to ClawHub
+        # The release job above already synced openclaw/package.json and
+        # openclaw/openclaw.plugin.json versions to the bumped root
+        # version, so this publishes the same X.Y.Z that npm just got.
+        run: clawhub package publish ./openclaw
+
+      - name: Summary
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          {
+            echo "### Published"
+            echo ""
+            echo "- **npm**: \`@deeplake/hivemind@${VERSION}\` (with Sigstore provenance)"
+            echo "- **ClawHub**: \`clawhub:hivemind@${VERSION}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

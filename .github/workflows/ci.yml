@@ -213,3 +213,12 @@ jobs:
             echo "::error::bundle/ is out of date. Run 'npm run build' and commit the bundle/ directory."
             exit 1
           }
+
+      - name: Pack-check (refuse forbidden filenames in tarball)
+        # Regression guard: hard-fails CI if a PR widens package.json's
+        # `files` array (or adds a permissive .npmignore) such that
+        # credentials, CI workflows, or git internals would ship to npm.
+        # Mirrors the same gate inside release.yml's publish job, so a
+        # broken `files` array trips on the PR — never on a release run
+        # where tokens are reachable.
+        run: npm run pack:check
