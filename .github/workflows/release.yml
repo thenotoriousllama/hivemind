@@ -202,14 +202,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build bundles
+        # Must run BEFORE the quality gate. `npm run ci` includes vitest,
+        # and the bundle-scan tests under
+        # claude-code/tests/skilify-session-start-injection.test.ts read
+        # openclaw/dist/index.js + openclaw/dist/skilify-worker.js
+        # directly. openclaw/dist/ is gitignored — it only exists after
+        # `npm run build`. Without this step before the gate, vitest
+        # fails with ENOENT and the publish aborts. Same root cause as
+        # 64cac0b in ci.yml; that fix never propagated to this job.
+        run: npm run build
+
       - name: Quality gate (typecheck + duplication + test)
         # Belt-and-braces: ci.yml already gates merges to main, but a
         # publish job that doesn't re-run the gate could ship if someone
         # disables a CI status check.
         run: npm run ci
-
-      - name: Build bundles
-        run: npm run build
 
       - name: Pack-check (refuse forbidden filenames in tarball)
         run: npm run pack:check
