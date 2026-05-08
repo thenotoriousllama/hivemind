@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -144,7 +144,6 @@ describe("writeLastRun + readLastRun", () => {
   it("returns null on malformed JSON", () => {
     // Manually drop garbage at the path
     const path = join(tmpHome, TIMESTAMP_REL);
-    const { mkdirSync, writeFileSync } = require("node:fs");
     mkdirSync(join(tmpHome, ".deeplake/state/skilify"), { recursive: true });
     writeFileSync(path, "not json");
     expect(readLastRun()).toBeNull();
@@ -152,7 +151,6 @@ describe("writeLastRun + readLastRun", () => {
 
   it("returns null when JSON has no/invalid lastRunMs", () => {
     const path = join(tmpHome, TIMESTAMP_REL);
-    const { mkdirSync, writeFileSync } = require("node:fs");
     mkdirSync(join(tmpHome, ".deeplake/state/skilify"), { recursive: true });
     writeFileSync(path, JSON.stringify({ lastRunMs: "not-a-number" }));
     expect(readLastRun()).toBeNull();

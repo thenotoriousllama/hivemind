@@ -3353,6 +3353,7 @@ var VERSION_DIR = join8(PI_AGENT_DIR, ".hivemind");
 var WIKI_WORKER_DIR = join8(PI_AGENT_DIR, "hivemind");
 var WIKI_WORKER_PATH = join8(WIKI_WORKER_DIR, "wiki-worker.js");
 var SKILIFY_WORKER_PATH = join8(WIKI_WORKER_DIR, "skilify-worker.js");
+var AUTOPULL_WORKER_PATH = join8(WIKI_WORKER_DIR, "autopull-worker.js");
 var HIVEMIND_BLOCK_START = "<!-- BEGIN hivemind-memory -->";
 var HIVEMIND_BLOCK_END = "<!-- END hivemind-memory -->";
 var HIVEMIND_BLOCK_BODY = `${HIVEMIND_BLOCK_START}
@@ -3442,6 +3443,11 @@ function installPi() {
     ensureDir(WIKI_WORKER_DIR);
     copyFileSync2(srcSkilifyWorker, SKILIFY_WORKER_PATH);
   }
+  const srcAutopullWorker = join8(pkgRoot(), "pi", "bundle", "autopull-worker.js");
+  if (existsSync7(srcAutopullWorker)) {
+    ensureDir(WIKI_WORKER_DIR);
+    copyFileSync2(srcAutopullWorker, AUTOPULL_WORKER_PATH);
+  }
   ensureDir(VERSION_DIR);
   writeVersionStamp(VERSION_DIR, getVersion());
   log(`  pi             AGENTS.md updated -> ${AGENTS_MD}`);
@@ -3451,6 +3457,9 @@ function installPi() {
   }
   if (existsSync7(SKILIFY_WORKER_PATH)) {
     log(`  pi             skilify-worker installed -> ${SKILIFY_WORKER_PATH}`);
+  }
+  if (existsSync7(AUTOPULL_WORKER_PATH)) {
+    log(`  pi             autopull-worker installed -> ${AUTOPULL_WORKER_PATH}`);
   }
 }
 function uninstallPi() {

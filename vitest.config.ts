@@ -259,7 +259,7 @@ export default defineConfig({
         // inside detached subprocesses) are pragmatic to leave at 75-80.
         // feat/session-start-autopull-skills — auto-pull all-author skills
         // at every SessionStart, throttled + bounded.
-        "src/skilify/auto-pull.ts":         { statements: 90, branches: 70, functions: 90, lines: 80 },
+        "src/skilify/auto-pull.ts":         { statements: 90, branches: 70, functions: 90, lines: 90 },
         "src/skilify/extractors/index.ts":  { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/skilify/gate-parser.ts":       { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/skilify/gate-runner.ts":       { statements: 90, branches: 60, functions: 90, lines: 90 },

@@ -216,10 +216,23 @@ jobs:
       - name: Build bundles
         run: npm run build
 
-      - name: Verify bundle/ directory is up to date
+      - name: Verify bundle/ directories are up to date
+        # Regression guard for every shipped bundle, not just claude-code's.
+        # `npm run build` regenerates all of these from src/; if a PR
+        # forgets to commit the regenerated artefact the diff is non-empty
+        # and CI fails. openclaw/dist/ is gitignored (see "Build" step's
+        # comment about ENOENT on a fresh checkout) so it's intentionally
+        # not in this list — the test suite already exercises its content.
         run: |
-          git diff --exit-code claude-code/bundle/ || {
-            echo "::error::bundle/ is out of date. Run 'npm run build' and commit the bundle/ directory."
+          git diff --exit-code \
+            bundle/ \
+            claude-code/bundle/ \
+            codex/bundle/ \
+            cursor/bundle/ \
+            hermes/bundle/ \
+            mcp/bundle/ \
+            pi/bundle/ || {
+            echo "::error::A bundle directory is out of date. Run 'npm run build' and commit the regenerated files (the diff above shows which bundle drifted)."
             exit 1
           }
 
