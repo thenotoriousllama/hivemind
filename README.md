@@ -513,18 +513,20 @@ the other project recovers it.
 
 Every supported agent (Claude Code, Codex, Cursor, Hermes, pi) auto-runs
 the equivalent of `hivemind skilify pull --all-users --to global` at the
-start of each session, so teammate-mined skills become available without
-anyone having to remember to run pull manually. The pull is throttled —
-by default it only fires when the previous run was more than 30 minutes
-ago — and bounded by a 5-second timeout so a slow Deeplake never blocks
-SessionStart. All failures (network, missing table, auth) are swallowed
-silently and the session starts regardless. The last-run timestamp is
-persisted at `~/.deeplake/state/skilify/autopull-last-run.json`.
+start of every session, so teammate-mined skills become available without
+anyone having to remember to run pull manually.
 
-| Env var                            | Default | Effect                                                   |
-|------------------------------------|---------|----------------------------------------------------------|
-| `HIVEMIND_AUTOPULL_INTERVAL_MIN`   | `30`    | Minutes between auto-pulls. `0` runs every session, `-1` disables. |
-| `HIVEMIND_AUTOPULL_DISABLED`       | unset   | Set to `1` to disable auto-pull entirely.                |
+There is no throttle window. File writes inside `runPull` are idempotent
+(skipped when the local SKILL.md version is at-or-newer than remote),
+symlink fan-out is `lstat`-checked, and manifest writes are dedup'd —
+so the per-call cost is one SQL round-trip plus a handful of `existsSync`
+syscalls when nothing has changed. Bounded by a 5-second timeout so a
+slow Deeplake never blocks SessionStart. All failures (network, missing
+table, auth) are swallowed silently and the session starts regardless.
+
+| Env var                            | Default | Effect                                  |
+|------------------------------------|---------|-----------------------------------------|
+| `HIVEMIND_AUTOPULL_DISABLED`       | unset   | Set to `1` to disable auto-pull entirely. |
 
 ### Configuration
 

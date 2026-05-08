@@ -169,9 +169,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // Auto-pull skills from all org users (5s timeout, throttled to 30min).
-  // See src/skilify/auto-pull.ts for the full opt-out story. maybeAutoPull
-  // never rejects — all errors are swallowed inside.
+  // Auto-pull skills from all org users on every SessionStart (5s timeout).
+  // File writes inside runPull are idempotent (skipped when local version
+  // is at-or-newer than remote), so re-running every session is cheap on
+  // disk; the only per-call cost is the SQL round-trip. maybeAutoPull
+  // never rejects — all errors are swallowed inside. Hard opt-out:
+  // HIVEMIND_AUTOPULL_DISABLED=1.
   const pullResult = await maybeAutoPull();
   log(`autopull: pulled=${pullResult.pulled} skipped=${pullResult.skipped}`);
 
