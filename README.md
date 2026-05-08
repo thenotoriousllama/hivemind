@@ -282,7 +282,7 @@ Per-agent integration mechanisms (marketplace plugin, hooks, skills, native exte
 ## Roadmap
 
 - **Trajectory export for fine-tuning.** Because traces are stored in Deeplake's tensor format, they're export-ready as PyTorch datasets. Teams running their own open-source models can fine-tune on their org's accumulated trajectories. A handful of advanced customers are already doing this against the trajectories their Claude Code and Codex agents generated.
-- **Dense vector retrieval.** Currently using BM25 + grep fallback. Dense retrieval over GPU-accelerated vector search is in active development.
+- **GPU-accelerated dense retrieval at scale.** Local CPU embeddings already ship via the optional nomic-embed daemon (see [Semantic search](#semantic-search-optional)). Next: GPU-accelerated vector search over the full trace store, on by default.
 - **Skill versioning and review.** Pre-release human review for codified skills before they propagate org-wide, for teams that want a curation step.
 - **More agents.** If your team uses an agent that isn't on the supported-assistants list above, open an issue.
 
