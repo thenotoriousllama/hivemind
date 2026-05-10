@@ -839,7 +839,7 @@ function embeddingsDisabled() {
 
 // dist/src/hooks/cursor/capture.js
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname3, join as join13 } from "node:path";
+import { dirname as dirname3, join as join14 } from "node:path";
 
 // dist/src/hooks/summary-state.js
 import { readFileSync as readFileSync4, writeFileSync as writeFileSync2, writeSync as writeSync2, mkdirSync as mkdirSync2, renameSync, existsSync as existsSync4, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
@@ -1096,14 +1096,14 @@ function bundleDirFromImportMeta(importMetaUrl) {
   return dirname(fileURLToPath(importMetaUrl));
 }
 
-// dist/src/skilify/spawn-skilify-worker.js
+// dist/src/skillify/spawn-skillify-worker.js
 import { spawn as spawn3 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname2, join as join10 } from "node:path";
 import { writeFileSync as writeFileSync4, mkdirSync as mkdirSync5, appendFileSync as appendFileSync3, chmodSync } from "node:fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "node:os";
 
-// dist/src/skilify/gate-runner.js
+// dist/src/skillify/gate-runner.js
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync5 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
@@ -1134,20 +1134,20 @@ function findAgentBin(agent) {
   }
 }
 
-// dist/src/skilify/spawn-skilify-worker.js
+// dist/src/skillify/spawn-skillify-worker.js
 var HOME2 = homedir8();
-var SKILIFY_LOG = join10(HOME2, ".claude", "hooks", "skilify.log");
-function skilifyLog(msg) {
+var SKILLIFY_LOG = join10(HOME2, ".claude", "hooks", "skillify.log");
+function skillifyLog(msg) {
   try {
-    mkdirSync5(dirname2(SKILIFY_LOG), { recursive: true });
-    appendFileSync3(SKILIFY_LOG, `[${utcTimestamp()}] ${msg}
+    mkdirSync5(dirname2(SKILLIFY_LOG), { recursive: true });
+    appendFileSync3(SKILLIFY_LOG, `[${utcTimestamp()}] ${msg}
 `);
   } catch {
   }
 }
-function spawnSkilifyWorker(opts) {
+function spawnSkillifyWorker(opts) {
   const { config, cwd, projectKey, project, bundleDir, agent, scopeConfig, currentSessionId, reason } = opts;
-  const tmpDir = join10(tmpdir3(), `deeplake-skilify-${projectKey}-${Date.now()}`);
+  const tmpDir = join10(tmpdir3(), `deeplake-skillify-${projectKey}-${Date.now()}`);
   mkdirSync5(tmpDir, { recursive: true, mode: 448 });
   const gateBin = findAgentBin(agent);
   const configFile = join10(tmpDir, "config.json");
@@ -1173,40 +1173,67 @@ function spawnSkilifyWorker(opts) {
     hermesModel: process.env.HIVEMIND_HERMES_MODEL,
     piProvider: process.env.HIVEMIND_PI_PROVIDER,
     piModel: process.env.HIVEMIND_PI_MODEL,
-    skilifyLog: SKILIFY_LOG,
+    skillifyLog: SKILLIFY_LOG,
     currentSessionId
   }), { mode: 384 });
   try {
     chmodSync(configFile, 384);
   } catch {
   }
-  skilifyLog(`${reason}: spawning skilify worker for project=${project} key=${projectKey}`);
-  const workerPath = join10(bundleDir, "skilify-worker.js");
+  skillifyLog(`${reason}: spawning skillify worker for project=${project} key=${projectKey}`);
+  const workerPath = join10(bundleDir, "skillify-worker.js");
   spawn3("nohup", ["node", workerPath, configFile], {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"]
   }).unref();
-  skilifyLog(`${reason}: spawned skilify worker for ${projectKey}`);
+  skillifyLog(`${reason}: spawned skillify worker for ${projectKey}`);
 }
 
-// dist/src/skilify/state.js
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync5, writeSync as writeSync3, mkdirSync as mkdirSync6, renameSync as renameSync2, existsSync as existsSync6, unlinkSync as unlinkSync3, openSync as openSync3, closeSync as closeSync3 } from "node:fs";
+// dist/src/skillify/state.js
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync5, writeSync as writeSync3, mkdirSync as mkdirSync6, renameSync as renameSync3, existsSync as existsSync7, unlinkSync as unlinkSync3, openSync as openSync3, closeSync as closeSync3 } from "node:fs";
 import { execSync as execSync2 } from "node:child_process";
-import { homedir as homedir9 } from "node:os";
+import { homedir as homedir10 } from "node:os";
 import { createHash } from "node:crypto";
-import { join as join11, basename } from "node:path";
-var dlog2 = (msg) => log("skilify-state", msg);
-var STATE_DIR2 = join11(homedir9(), ".deeplake", "state", "skilify");
+import { join as join12, basename } from "node:path";
+
+// dist/src/skillify/legacy-migration.js
+import { existsSync as existsSync6, renameSync as renameSync2 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { join as join11 } from "node:path";
+var dlog2 = (msg) => log("skillify-migrate", msg);
+var attempted = false;
+function migrateLegacyStateDir() {
+  if (attempted)
+    return;
+  attempted = true;
+  const root = join11(homedir9(), ".deeplake", "state");
+  const legacy = join11(root, "skilify");
+  const current = join11(root, "skillify");
+  if (!existsSync6(legacy))
+    return;
+  if (existsSync6(current))
+    return;
+  try {
+    renameSync2(legacy, current);
+    dlog2(`migrated ${legacy} -> ${current}`);
+  } catch (err) {
+    dlog2(`migration failed (${err.code ?? "unknown"}); leaving legacy dir in place`);
+  }
+}
+
+// dist/src/skillify/state.js
+var dlog3 = (msg) => log("skillify-state", msg);
+var STATE_DIR2 = join12(homedir10(), ".deeplake", "state", "skillify");
 var YIELD_BUF2 = new Int32Array(new SharedArrayBuffer(4));
 var TRIGGER_THRESHOLD = (() => {
-  const n = Number(process.env.HIVEMIND_SKILIFY_EVERY_N_TURNS ?? "");
+  const n = Number(process.env.HIVEMIND_SKILLIFY_EVERY_N_TURNS ?? "");
   return Number.isInteger(n) && n > 0 ? n : 20;
 })();
 function statePath2(projectKey) {
-  return join11(STATE_DIR2, `${projectKey}.json`);
+  return join12(STATE_DIR2, `${projectKey}.json`);
 }
 function lockPath2(projectKey) {
-  return join11(STATE_DIR2, `${projectKey}.lock`);
+  return join12(STATE_DIR2, `${projectKey}.lock`);
 }
 function deriveProjectKey(cwd) {
   const project = basename(cwd) || "unknown";
@@ -1225,7 +1252,7 @@ function deriveProjectKey(cwd) {
 }
 function readState2(projectKey) {
   const p = statePath2(projectKey);
-  if (!existsSync6(p))
+  if (!existsSync7(p))
     return null;
   try {
     return JSON.parse(readFileSync5(p, "utf-8"));
@@ -1234,13 +1261,15 @@ function readState2(projectKey) {
   }
 }
 function writeState2(projectKey, state) {
+  migrateLegacyStateDir();
   mkdirSync6(STATE_DIR2, { recursive: true });
   const p = statePath2(projectKey);
   const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync5(tmp, JSON.stringify(state, null, 2));
-  renameSync2(tmp, p);
+  renameSync3(tmp, p);
 }
 function withRmwLock2(projectKey, fn) {
+  migrateLegacyStateDir();
   mkdirSync6(STATE_DIR2, { recursive: true });
   const rmw = lockPath2(projectKey) + ".rmw";
   const deadline = Date.now() + 2e3;
@@ -1252,11 +1281,11 @@ function withRmwLock2(projectKey, fn) {
       if (e.code !== "EEXIST")
         throw e;
       if (Date.now() > deadline) {
-        dlog2(`rmw lock deadline exceeded for ${projectKey}, reclaiming stale lock`);
+        dlog3(`rmw lock deadline exceeded for ${projectKey}, reclaiming stale lock`);
         try {
           unlinkSync3(rmw);
         } catch (unlinkErr) {
-          dlog2(`stale rmw lock unlink failed for ${projectKey}: ${unlinkErr.message}`);
+          dlog3(`stale rmw lock unlink failed for ${projectKey}: ${unlinkErr.message}`);
         }
         continue;
       }
@@ -1270,7 +1299,7 @@ function withRmwLock2(projectKey, fn) {
     try {
       unlinkSync3(rmw);
     } catch (unlinkErr) {
-      dlog2(`rmw lock cleanup failed for ${projectKey}: ${unlinkErr.message}`);
+      dlog3(`rmw lock cleanup failed for ${projectKey}: ${unlinkErr.message}`);
     }
   }
 }
@@ -1300,20 +1329,21 @@ function resetCounter(projectKey) {
   });
 }
 function tryAcquireWorkerLock(projectKey, maxAgeMs = 10 * 60 * 1e3) {
+  migrateLegacyStateDir();
   mkdirSync6(STATE_DIR2, { recursive: true });
   const p = lockPath2(projectKey);
-  if (existsSync6(p)) {
+  if (existsSync7(p)) {
     try {
       const ageMs = Date.now() - parseInt(readFileSync5(p, "utf-8"), 10);
       if (Number.isFinite(ageMs) && ageMs < maxAgeMs)
         return false;
     } catch (readErr) {
-      dlog2(`worker lock unreadable for ${projectKey}, treating as stale: ${readErr.message}`);
+      dlog3(`worker lock unreadable for ${projectKey}, treating as stale: ${readErr.message}`);
     }
     try {
       unlinkSync3(p);
     } catch (unlinkErr) {
-      dlog2(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
+      dlog3(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
       return false;
     }
   }
@@ -1337,15 +1367,16 @@ function releaseWorkerLock(projectKey) {
   }
 }
 
-// dist/src/skilify/scope-config.js
-import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync6, writeFileSync as writeFileSync6 } from "node:fs";
-import { homedir as homedir10 } from "node:os";
-import { join as join12 } from "node:path";
-var STATE_DIR3 = join12(homedir10(), ".deeplake", "state", "skilify");
-var CONFIG_PATH = join12(STATE_DIR3, "config.json");
+// dist/src/skillify/scope-config.js
+import { existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir11 } from "node:os";
+import { join as join13 } from "node:path";
+var STATE_DIR3 = join13(homedir11(), ".deeplake", "state", "skillify");
+var CONFIG_PATH = join13(STATE_DIR3, "config.json");
 var DEFAULT = { scope: "me", team: [], install: "project" };
 function loadScopeConfig() {
-  if (!existsSync7(CONFIG_PATH))
+  migrateLegacyStateDir();
+  if (!existsSync8(CONFIG_PATH))
     return DEFAULT;
   try {
     const raw = JSON.parse(readFileSync6(CONFIG_PATH, "utf-8"));
@@ -1358,9 +1389,9 @@ function loadScopeConfig() {
   }
 }
 
-// dist/src/skilify/triggers.js
+// dist/src/skillify/triggers.js
 function tryStopCounterTrigger(opts) {
-  if (process.env.HIVEMIND_SKILIFY_WORKER === "1")
+  if (process.env.HIVEMIND_SKILLIFY_WORKER === "1")
     return;
   if (!opts.cwd)
     return;
@@ -1369,13 +1400,13 @@ function tryStopCounterTrigger(opts) {
     if (state.counter < TRIGGER_THRESHOLD)
       return;
     if (!tryAcquireWorkerLock(state.projectKey)) {
-      skilifyLog(`Stop: trigger suppressed (worker lock held) project=${state.project}`);
+      skillifyLog(`Stop: trigger suppressed (worker lock held) project=${state.project}`);
       return;
     }
-    skilifyLog(`Stop: threshold hit (counter=${state.counter}, N=${TRIGGER_THRESHOLD}) project=${state.project} agent=${opts.agent}`);
+    skillifyLog(`Stop: threshold hit (counter=${state.counter}, N=${TRIGGER_THRESHOLD}) project=${state.project} agent=${opts.agent}`);
     resetCounter(state.projectKey);
     try {
-      spawnSkilifyWorker({
+      spawnSkillifyWorker({
         config: opts.config,
         cwd: opts.cwd,
         projectKey: state.projectKey,
@@ -1387,21 +1418,21 @@ function tryStopCounterTrigger(opts) {
         reason: "Stop"
       });
     } catch (e) {
-      skilifyLog(`Stop spawn failed: ${e?.message ?? e}`);
+      skillifyLog(`Stop spawn failed: ${e?.message ?? e}`);
       try {
         releaseWorkerLock(state.projectKey);
       } catch {
       }
     }
   } catch (e) {
-    skilifyLog(`Stop trigger error: ${e?.message ?? e}`);
+    skillifyLog(`Stop trigger error: ${e?.message ?? e}`);
   }
 }
 
 // dist/src/hooks/cursor/capture.js
 var log4 = (msg) => log("cursor-capture", msg);
 function resolveEmbedDaemonPath() {
-  return join13(dirname3(fileURLToPath3(import.meta.url)), "embeddings", "embed-daemon.js");
+  return join14(dirname3(fileURLToPath3(import.meta.url)), "embeddings", "embed-daemon.js");
 }
 var CAPTURE = process.env.HIVEMIND_CAPTURE !== "false";
 function resolveCwd(input) {
@@ -1489,7 +1520,7 @@ async function main() {
   }
   log4("capture ok \u2192 cloud");
   maybeTriggerPeriodicSummary(sessionId, cwd, config);
-  if (event === "afterAgentResponse" && process.env.HIVEMIND_WIKI_WORKER !== "1" && process.env.HIVEMIND_SKILIFY_WORKER !== "1") {
+  if (event === "afterAgentResponse" && process.env.HIVEMIND_WIKI_WORKER !== "1" && process.env.HIVEMIND_SKILLIFY_WORKER !== "1") {
     tryStopCounterTrigger({
       config,
       cwd,

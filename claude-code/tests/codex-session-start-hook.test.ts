@@ -27,9 +27,9 @@ vi.mock("../../src/utils/debug.js", () => ({
   log: (_t: string, msg: string) => debugLogMock(msg),
 }));
 // Stub the auto-pull so the hook test doesn't hit the real Deeplake API or
-// touch the developer's ~/.deeplake/state/skilify timestamp file. Tests for
-// the auto-pull module itself live in claude-code/tests/skilify-auto-pull.test.ts.
-vi.mock("../../src/skilify/auto-pull.js", () => ({
+// touch the developer's ~/.deeplake/state/skillify timestamp file. Tests for
+// the auto-pull module itself live in claude-code/tests/skillify-auto-pull.test.ts.
+vi.mock("../../src/skillify/auto-pull.js", () => ({
   maybeAutoPull: (...a: any[]) => maybeAutoPullMock(...a),
 }));
 vi.mock("node:child_process", async () => {

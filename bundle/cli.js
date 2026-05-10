@@ -3352,7 +3352,7 @@ var EXTENSION_PATH = join8(EXTENSIONS_DIR, "hivemind.ts");
 var VERSION_DIR = join8(PI_AGENT_DIR, ".hivemind");
 var WIKI_WORKER_DIR = join8(PI_AGENT_DIR, "hivemind");
 var WIKI_WORKER_PATH = join8(WIKI_WORKER_DIR, "wiki-worker.js");
-var SKILIFY_WORKER_PATH = join8(WIKI_WORKER_DIR, "skilify-worker.js");
+var SKILLIFY_WORKER_PATH = join8(WIKI_WORKER_DIR, "skillify-worker.js");
 var AUTOPULL_WORKER_PATH = join8(WIKI_WORKER_DIR, "autopull-worker.js");
 var HIVEMIND_BLOCK_START = "<!-- BEGIN hivemind-memory -->";
 var HIVEMIND_BLOCK_END = "<!-- END hivemind-memory -->";
@@ -3438,10 +3438,10 @@ function installPi() {
     ensureDir(WIKI_WORKER_DIR);
     copyFileSync2(srcWorker, WIKI_WORKER_PATH);
   }
-  const srcSkilifyWorker = join8(pkgRoot(), "pi", "bundle", "skilify-worker.js");
-  if (existsSync7(srcSkilifyWorker)) {
+  const srcSkillifyWorker = join8(pkgRoot(), "pi", "bundle", "skillify-worker.js");
+  if (existsSync7(srcSkillifyWorker)) {
     ensureDir(WIKI_WORKER_DIR);
-    copyFileSync2(srcSkilifyWorker, SKILIFY_WORKER_PATH);
+    copyFileSync2(srcSkillifyWorker, SKILLIFY_WORKER_PATH);
   }
   const srcAutopullWorker = join8(pkgRoot(), "pi", "bundle", "autopull-worker.js");
   if (existsSync7(srcAutopullWorker)) {
@@ -3455,8 +3455,8 @@ function installPi() {
   if (existsSync7(WIKI_WORKER_PATH)) {
     log(`  pi             wiki-worker installed -> ${WIKI_WORKER_PATH}`);
   }
-  if (existsSync7(SKILIFY_WORKER_PATH)) {
-    log(`  pi             skilify-worker installed -> ${SKILIFY_WORKER_PATH}`);
+  if (existsSync7(SKILLIFY_WORKER_PATH)) {
+    log(`  pi             skillify-worker installed -> ${SKILLIFY_WORKER_PATH}`);
   }
   if (existsSync7(AUTOPULL_WORKER_PATH)) {
     log(`  pi             autopull-worker installed -> ${AUTOPULL_WORKER_PATH}`);
@@ -4718,20 +4718,48 @@ if (process.argv[1] && process.argv[1].endsWith("auth-login.js")) {
   });
 }
 
-// dist/src/commands/skilify.js
-import { readdirSync as readdirSync4, existsSync as existsSync18, readFileSync as readFileSync13, mkdirSync as mkdirSync8, renameSync as renameSync3 } from "node:fs";
-import { homedir as homedir11 } from "node:os";
-import { dirname as dirname4, join as join21 } from "node:path";
+// dist/src/commands/skillify.js
+import { readdirSync as readdirSync4, existsSync as existsSync19, readFileSync as readFileSync13, mkdirSync as mkdirSync8, renameSync as renameSync4 } from "node:fs";
+import { homedir as homedir12 } from "node:os";
+import { dirname as dirname4, join as join22 } from "node:path";
 
-// dist/src/skilify/scope-config.js
-import { existsSync as existsSync12, mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync6 } from "node:fs";
+// dist/src/skillify/scope-config.js
+import { existsSync as existsSync13, mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join16 } from "node:path";
+
+// dist/src/skillify/legacy-migration.js
+import { existsSync as existsSync12, renameSync } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join15 } from "node:path";
-var STATE_DIR = join15(homedir5(), ".deeplake", "state", "skilify");
-var CONFIG_PATH2 = join15(STATE_DIR, "config.json");
+var dlog = (msg) => log2("skillify-migrate", msg);
+var attempted = false;
+function migrateLegacyStateDir() {
+  if (attempted)
+    return;
+  attempted = true;
+  const root = join15(homedir5(), ".deeplake", "state");
+  const legacy = join15(root, "skilify");
+  const current = join15(root, "skillify");
+  if (!existsSync12(legacy))
+    return;
+  if (existsSync12(current))
+    return;
+  try {
+    renameSync(legacy, current);
+    dlog(`migrated ${legacy} -> ${current}`);
+  } catch (err) {
+    dlog(`migration failed (${err.code ?? "unknown"}); leaving legacy dir in place`);
+  }
+}
+
+// dist/src/skillify/scope-config.js
+var STATE_DIR = join16(homedir6(), ".deeplake", "state", "skillify");
+var CONFIG_PATH2 = join16(STATE_DIR, "config.json");
 var DEFAULT = { scope: "me", team: [], install: "project" };
 function loadScopeConfig() {
-  if (!existsSync12(CONFIG_PATH2))
+  migrateLegacyStateDir();
+  if (!existsSync13(CONFIG_PATH2))
     return DEFAULT;
   try {
     const raw = JSON.parse(readFileSync9(CONFIG_PATH2, "utf-8"));
@@ -4744,19 +4772,20 @@ function loadScopeConfig() {
   }
 }
 function saveScopeConfig(cfg) {
+  migrateLegacyStateDir();
   mkdirSync4(STATE_DIR, { recursive: true });
   writeFileSync6(CONFIG_PATH2, JSON.stringify(cfg, null, 2));
 }
 
-// dist/src/skilify/pull.js
-import { existsSync as existsSync16, readFileSync as readFileSync12, writeFileSync as writeFileSync9, mkdirSync as mkdirSync7, renameSync as renameSync2, lstatSync as lstatSync4, readlinkSync as readlinkSync2, symlinkSync as symlinkSync2, unlinkSync as unlinkSync8 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-import { dirname as dirname3, join as join19 } from "node:path";
+// dist/src/skillify/pull.js
+import { existsSync as existsSync17, readFileSync as readFileSync12, writeFileSync as writeFileSync9, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync4, readlinkSync as readlinkSync2, symlinkSync as symlinkSync2, unlinkSync as unlinkSync8 } from "node:fs";
+import { homedir as homedir10 } from "node:os";
+import { dirname as dirname3, join as join20 } from "node:path";
 
-// dist/src/skilify/skill-writer.js
-import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, readdirSync as readdirSync2, statSync as statSync2, writeFileSync as writeFileSync7 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { join as join16 } from "node:path";
+// dist/src/skillify/skill-writer.js
+import { existsSync as existsSync14, mkdirSync as mkdirSync5, readFileSync as readFileSync10, readdirSync as readdirSync2, statSync as statSync2, writeFileSync as writeFileSync7 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { join as join17 } from "node:path";
 function assertValidSkillName(name) {
   if (typeof name !== "string" || name.length === 0) {
     throw new Error(`invalid skill name: empty or non-string`);
@@ -4814,18 +4843,19 @@ function parseFrontmatter(text) {
   return { fm, body };
 }
 
-// dist/src/skilify/manifest.js
-import { existsSync as existsSync14, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync, unlinkSync as unlinkSync7, writeFileSync as writeFileSync8 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { dirname as dirname2, join as join17 } from "node:path";
+// dist/src/skillify/manifest.js
+import { existsSync as existsSync15, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync as renameSync2, unlinkSync as unlinkSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { dirname as dirname2, join as join18 } from "node:path";
 function emptyManifest() {
   return { version: 1, entries: [] };
 }
 function manifestPath() {
-  return join17(homedir7(), ".deeplake", "state", "skilify", "pulled.json");
+  return join18(homedir8(), ".deeplake", "state", "skillify", "pulled.json");
 }
 function loadManifest(path = manifestPath()) {
-  if (!existsSync14(path))
+  migrateLegacyStateDir();
+  if (!existsSync15(path))
     return emptyManifest();
   let raw;
   try {
@@ -4875,10 +4905,11 @@ function loadManifest(path = manifestPath()) {
   }
 }
 function saveManifest(m, path = manifestPath()) {
+  migrateLegacyStateDir();
   mkdirSync6(dirname2(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync8(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
-  renameSync(tmp, path);
+  renameSync2(tmp, path);
 }
 function recordPull(entry, path = manifestPath()) {
   const m = loadManifest(path);
@@ -4920,7 +4951,7 @@ function pruneOrphanedEntries(path = manifestPath()) {
   const live = [];
   let pruned = 0;
   for (const e of m.entries) {
-    if (existsSync14(join17(e.installRoot, e.dirName))) {
+    if (existsSync15(join18(e.installRoot, e.dirName))) {
       live.push(e);
       continue;
     }
@@ -4932,26 +4963,26 @@ function pruneOrphanedEntries(path = manifestPath()) {
   return pruned;
 }
 
-// dist/src/skilify/agent-roots.js
-import { existsSync as existsSync15 } from "node:fs";
-import { homedir as homedir8 } from "node:os";
-import { join as join18 } from "node:path";
+// dist/src/skillify/agent-roots.js
+import { existsSync as existsSync16 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { join as join19 } from "node:path";
 function candidates(home) {
   return [
     // agentskills.io shared root — codex installer always creates it,
     // pi reads from it as one of two paths.
-    join18(home, ".agents", "skills"),
+    join19(home, ".agents", "skills"),
     // hermes-specific root, agentskills.io-compatible layout.
-    join18(home, ".hermes", "skills"),
+    join19(home, ".hermes", "skills"),
     // pi's primary root (pi reads from this AND ~/.agents/skills/).
-    join18(home, ".pi", "agent", "skills")
+    join19(home, ".pi", "agent", "skills")
   ];
 }
-function detectAgentSkillsRoots(canonicalRoot, home = homedir8()) {
-  return candidates(home).filter((p) => p !== canonicalRoot && existsSync15(p));
+function detectAgentSkillsRoots(canonicalRoot, home = homedir9()) {
+  return candidates(home).filter((p) => p !== canonicalRoot && existsSync16(p));
 }
 
-// dist/src/skilify/pull.js
+// dist/src/skillify/pull.js
 function assertValidAuthor(author) {
   if (!author)
     throw new Error("author is empty");
@@ -4983,15 +5014,15 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join19(homedir9(), ".claude", "skills");
+    return join20(homedir10(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join19(cwd, ".claude", "skills");
+  return join20(cwd, ".claude", "skills");
 }
 function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
   const out = [];
   for (const root of agentRoots) {
-    const link = join19(root, dirName);
+    const link = join20(root, dirName);
     let existing;
     try {
       existing = lstatSync4(link);
@@ -5091,7 +5122,7 @@ function renderFrontmatter(fm) {
   return lines.join("\n");
 }
 function readLocalVersion(path) {
-  if (!existsSync16(path))
+  if (!existsSync17(path))
     return null;
   try {
     const text = readFileSync12(path, "utf-8");
@@ -5180,8 +5211,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join19(root, dirName);
-    const skillFile = join19(skillDir, "SKILL.md");
+    const skillDir = join20(root, dirName);
+    const skillFile = join20(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -5193,9 +5224,9 @@ async function runPull(opts) {
     let manifestError;
     if (action === "wrote") {
       mkdirSync7(skillDir, { recursive: true });
-      if (existsSync16(skillFile)) {
+      if (existsSync17(skillFile)) {
         try {
-          renameSync2(skillFile, `${skillFile}.bak`);
+          renameSync3(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
@@ -5237,16 +5268,16 @@ async function runPull(opts) {
   return summary;
 }
 
-// dist/src/skilify/unpull.js
-import { existsSync as existsSync17, readdirSync as readdirSync3, rmSync as rmSync5, statSync as statSync3 } from "node:fs";
-import { homedir as homedir10 } from "node:os";
-import { join as join20 } from "node:path";
+// dist/src/skillify/unpull.js
+import { existsSync as existsSync18, readdirSync as readdirSync3, rmSync as rmSync5, statSync as statSync3 } from "node:fs";
+import { homedir as homedir11 } from "node:os";
+import { join as join21 } from "node:path";
 function resolveUnpullRoot(install, cwd) {
   if (install === "global")
-    return join20(homedir10(), ".claude", "skills");
+    return join21(homedir11(), ".claude", "skills");
   if (!cwd)
     throw new Error("cwd required when install === 'project'");
-  return join20(cwd, ".claude", "skills");
+  return join21(cwd, ".claude", "skills");
 }
 function runUnpull(opts) {
   const root = resolveUnpullRoot(opts.install, opts.cwd);
@@ -5269,8 +5300,8 @@ function runUnpull(opts) {
   const entries = entriesForRoot(manifest, opts.install, root);
   for (const entry of entries) {
     summary.scanned++;
-    const path = join20(root, entry.dirName);
-    if (!existsSync17(path)) {
+    const path = join21(root, entry.dirName);
+    if (!existsSync18(path)) {
       if (!opts.dryRun) {
         unlinkSymlinks(entry.symlinks);
         removePullEntry(opts.install, entry.installRoot, entry.dirName);
@@ -5323,12 +5354,12 @@ function runUnpull(opts) {
     }
     summary.entries.push(result);
   }
-  if (existsSync17(root) && (opts.all || opts.legacyCleanup)) {
+  if (existsSync18(root) && (opts.all || opts.legacyCleanup)) {
     const manifestDirNames = new Set(entries.map((e) => e.dirName));
     for (const dirName of readdirSync3(root)) {
       if (manifestDirNames.has(dirName))
         continue;
-      const path = join20(root, dirName);
+      const path = join21(root, dirName);
       let st;
       try {
         st = statSync3(path);
@@ -5405,9 +5436,9 @@ function decideTargetForManifestEntry(entry, opts, userFilter, haveUserFilter) {
   return { shouldRemove: true };
 }
 
-// dist/src/commands/skilify.js
+// dist/src/commands/skillify.js
 function stateDir() {
-  return join21(homedir11(), ".deeplake", "state", "skilify");
+  return join22(homedir12(), ".deeplake", "state", "skillify");
 }
 function showStatus() {
   const cfg = loadScopeConfig();
@@ -5415,7 +5446,7 @@ function showStatus() {
   console.log(`team:    ${cfg.team.length === 0 ? "(empty)" : cfg.team.join(", ")}`);
   console.log(`install: ${cfg.install}  (${cfg.install === "global" ? "~/.claude/skills/" : "<project>/.claude/skills/"})`);
   const dir = stateDir();
-  if (!existsSync18(dir)) {
+  if (!existsSync19(dir)) {
     console.log(`state: (no projects tracked yet)`);
     return;
   }
@@ -5427,7 +5458,7 @@ function showStatus() {
   console.log(`state: ${files.length} project(s) tracked`);
   for (const f of files) {
     try {
-      const s = JSON.parse(readFileSync13(join21(dir, f), "utf-8"));
+      const s = JSON.parse(readFileSync13(join22(dir, f), "utf-8"));
       const skills = s.skillsGenerated.length === 0 ? "none" : s.skillsGenerated.join(", ");
       console.log(`  - ${s.project} (counter=${s.counter}, last=${s.lastDate ?? "never"}, skills=${skills})`);
     } catch {
@@ -5443,7 +5474,7 @@ function setScope(scope) {
   saveScopeConfig({ ...cfg, scope });
   console.log(`Scope set to '${scope}'.`);
   if (scope === "team" && cfg.team.length === 0) {
-    console.log(`Note: team list is empty. Use 'hivemind skilify team add <username>' to populate it.`);
+    console.log(`Note: team list is empty. Use 'hivemind skillify team add <username>' to populate it.`);
   }
 }
 function setInstall(loc) {
@@ -5453,31 +5484,31 @@ function setInstall(loc) {
   }
   const cfg = loadScopeConfig();
   saveScopeConfig({ ...cfg, install: loc });
-  const path = loc === "global" ? join21(homedir11(), ".claude", "skills") : "<cwd>/.claude/skills";
+  const path = loc === "global" ? join22(homedir12(), ".claude", "skills") : "<cwd>/.claude/skills";
   console.log(`Install location set to '${loc}'. New skills will be written to ${path}/<name>/SKILL.md.`);
 }
 function promoteSkill(name, cwd) {
   if (!name) {
-    console.error("Usage: hivemind skilify promote <skill-name>");
+    console.error("Usage: hivemind skillify promote <skill-name>");
     process.exit(1);
   }
-  const projectPath = join21(cwd, ".claude", "skills", name);
-  const globalPath = join21(homedir11(), ".claude", "skills", name);
-  if (!existsSync18(join21(projectPath, "SKILL.md"))) {
+  const projectPath = join22(cwd, ".claude", "skills", name);
+  const globalPath = join22(homedir12(), ".claude", "skills", name);
+  if (!existsSync19(join22(projectPath, "SKILL.md"))) {
     console.error(`Skill '${name}' not found at ${projectPath}/SKILL.md`);
     process.exit(1);
   }
-  if (existsSync18(join21(globalPath, "SKILL.md"))) {
+  if (existsSync19(join22(globalPath, "SKILL.md"))) {
     console.error(`Skill '${name}' already exists at ${globalPath}/SKILL.md \u2014 refusing to overwrite. Remove it first or rename the project skill.`);
     process.exit(1);
   }
   mkdirSync8(dirname4(globalPath), { recursive: true });
-  renameSync3(projectPath, globalPath);
+  renameSync4(projectPath, globalPath);
   console.log(`Promoted '${name}' from ${projectPath} \u2192 ${globalPath}.`);
 }
 function teamAdd(name) {
   if (!name) {
-    console.error("Usage: hivemind skilify team add <username>");
+    console.error("Usage: hivemind skillify team add <username>");
     process.exit(1);
   }
   const cfg = loadScopeConfig();
@@ -5491,7 +5522,7 @@ function teamAdd(name) {
 }
 function teamRemove(name) {
   if (!name) {
-    console.error("Usage: hivemind skilify team remove <username>");
+    console.error("Usage: hivemind skillify team remove <username>");
     process.exit(1);
   }
   const cfg = loadScopeConfig();
@@ -5514,14 +5545,14 @@ function teamList() {
 }
 function usage() {
   console.log("Usage:");
-  console.log("  hivemind skilify                            show current scope, team, install, and per-project state");
-  console.log("  hivemind skilify scope <me|team|org>        set the mining scope");
-  console.log("  hivemind skilify install <project|global>   set where new skills are written");
-  console.log("  hivemind skilify promote <skill-name>       move a project skill to the global location");
-  console.log("  hivemind skilify team add <username>        add a username to the team list");
-  console.log("  hivemind skilify team remove <username>     remove a username from the team list");
-  console.log("  hivemind skilify team list                  list current team members");
-  console.log("  hivemind skilify pull [skill-name] [opts]   fetch skills from Deeplake to local FS");
+  console.log("  hivemind skillify                            show current scope, team, install, and per-project state");
+  console.log("  hivemind skillify scope <me|team|org>        set the mining scope");
+  console.log("  hivemind skillify install <project|global>   set where new skills are written");
+  console.log("  hivemind skillify promote <skill-name>       move a project skill to the global location");
+  console.log("  hivemind skillify team add <username>        add a username to the team list");
+  console.log("  hivemind skillify team remove <username>     remove a username from the team list");
+  console.log("  hivemind skillify team list                  list current team members");
+  console.log("  hivemind skillify pull [skill-name] [opts]   fetch skills from Deeplake to local FS");
   console.log("    Options for pull:");
   console.log("      --to <project|global>     destination (default: global)");
   console.log("      --user <name>             only skills authored by this user");
@@ -5529,7 +5560,7 @@ function usage() {
   console.log("      --all-users               all authors (default \u2014 equivalent to no filter)");
   console.log("      --dry-run                 show what would be written, don't touch disk");
   console.log("      --force                   overwrite even when local version >= remote");
-  console.log("  hivemind skilify unpull [opts]              remove skills previously installed by pull");
+  console.log("  hivemind skillify unpull [opts]              remove skills previously installed by pull");
   console.log("    Options for unpull:");
   console.log("      --to <project|global>     where to scan (default: global)");
   console.log("      --user <name>             only entries authored by this user");
@@ -5538,7 +5569,7 @@ function usage() {
   console.log("      --dry-run                 show what would be removed");
   console.log("      --all                     also remove flat-layout (locally-mined) entries");
   console.log("      --legacy-cleanup          also remove pre-`--author`-layout legacy `<projectKey>/` dirs");
-  console.log("  hivemind skilify status                     show per-project state");
+  console.log("  hivemind skillify status                     show per-project state");
 }
 function takeFlagValue(args, flag) {
   const idx = args.indexOf(flag);
@@ -5602,7 +5633,7 @@ async function pullSkills(args) {
     console.error(`pull failed: ${e?.message ?? e}`);
     process.exit(1);
   }
-  const dest = toRaw === "global" ? join21(homedir11(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
+  const dest = toRaw === "global" ? join22(homedir12(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
   const filterDesc = users.length === 0 ? "all users" : users.join(", ");
   console.log(`Destination: ${dest}`);
   console.log(`Filter:      ${filterDesc}${skillName ? ` \xB7 skill='${skillName}'` : ""}${dryRun ? " \xB7 dry-run" : ""}${force ? " \xB7 force" : ""}`);
@@ -5652,7 +5683,7 @@ async function unpullSkills(args) {
     all,
     legacyCleanup
   });
-  const dest = toRaw === "global" ? join21(homedir11(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
+  const dest = toRaw === "global" ? join22(homedir12(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
   const filterParts = [];
   if (users.length > 0)
     filterParts.push(`users=${users.join(",")}`);
@@ -5677,7 +5708,7 @@ async function unpullSkills(args) {
   const prunedNote = summary.manifestPruned > 0 ? `, ${summary.manifestPruned} manifest-pruned` : "";
   console.log(`Result: ${summary.removed} removed, ${summary.wouldRemove} dry-run, ${summary.kept} kept${prunedNote}.`);
 }
-function runSkilifyCommand(args) {
+function runSkillifyCommand(args) {
   const sub = args[0];
   if (!sub || sub === "status") {
     showStatus();
@@ -5724,30 +5755,30 @@ function runSkilifyCommand(args) {
       teamList();
       return;
     }
-    console.error("Usage: hivemind skilify team <add|remove|list> [name]");
+    console.error("Usage: hivemind skillify team <add|remove|list> [name]");
     process.exit(1);
   }
   if (sub === "--help" || sub === "-h" || sub === "help") {
     usage();
     return;
   }
-  console.error(`Unknown skilify subcommand: ${sub}`);
+  console.error(`Unknown skillify subcommand: ${sub}`);
   usage();
   process.exit(1);
 }
-if (process.argv[1] && process.argv[1].endsWith("skilify.js")) {
-  runSkilifyCommand(process.argv.slice(2));
+if (process.argv[1] && process.argv[1].endsWith("skillify.js")) {
+  runSkillifyCommand(process.argv.slice(2));
 }
 
 // dist/src/cli/update.js
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { existsSync as existsSync19, readFileSync as readFileSync15, realpathSync } from "node:fs";
+import { existsSync as existsSync20, readFileSync as readFileSync15, realpathSync } from "node:fs";
 import { dirname as dirname6, sep } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // dist/src/utils/version-check.js
 import { readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname5, join as join22 } from "node:path";
+import { dirname as dirname5, join as join23 } from "node:path";
 function isNewer(latest, current) {
   const parse = (v) => v.split(".").map(Number);
   const [la, lb, lc] = parse(latest);
@@ -5792,7 +5823,7 @@ function detectInstallKind(argv1) {
   }
   let gitDir = installDir;
   for (let i = 0; i < 6; i++) {
-    if (existsSync19(`${gitDir}${sep}.git`)) {
+    if (existsSync20(`${gitDir}${sep}.git`)) {
       return { kind: "local-dev", installDir };
     }
     const parent = dirname6(gitDir);
@@ -5949,8 +5980,8 @@ Semantic search (embeddings):
   to run "embeddings install" automatically after installing the agent(s).
 
 Skill management (mine + share reusable Claude skills across the org):
-  hivemind skilify                         Show scope, team, install, and per-project state.
-  hivemind skilify pull [skill-name]       Sync skills from the org table to local FS.
+  hivemind skillify                         Show scope, team, install, and per-project state.
+  hivemind skillify pull [skill-name]       Sync skills from the org table to local FS.
                                            Options: --user <email>, --users a,b,c,
                                            --all-users, --to <project|global>,
                                            --dry-run, --force.
@@ -5960,17 +5991,17 @@ Skill management (mine + share reusable Claude skills across the org):
                                            Set HIVEMIND_AUTOPULL_INTERVAL_MIN=0 to
                                            force every session, =-1 (or
                                            HIVEMIND_AUTOPULL_DISABLED=1) to disable.
-  hivemind skilify unpull                  Remove skills previously installed by pull.
+  hivemind skillify unpull                  Remove skills previously installed by pull.
                                            Options: --user, --users, --not-mine,
                                            --to <project|global>, --dry-run,
                                            --all (also locally-mined),
                                            --legacy-cleanup (pre-suffix-author dirs).
-  hivemind skilify scope <me|team|org>     Set the sharing scope for newly mined skills.
-  hivemind skilify install <project|global>  Set where new skills are written.
-  hivemind skilify promote <name>          Move a project skill to the global location.
-  hivemind skilify team add <username>     Add a username to the team list.
-  hivemind skilify team remove <username>  Remove a username from the team list.
-  hivemind skilify team list               List current team members.
+  hivemind skillify scope <me|team|org>     Set the sharing scope for newly mined skills.
+  hivemind skillify install <project|global>  Set where new skills are written.
+  hivemind skillify promote <name>          Move a project skill to the global location.
+  hivemind skillify team add <username>     Add a username to the team list.
+  hivemind skillify team remove <username>  Remove a username from the team list.
+  hivemind skillify team list               List current team members.
 
 Account / org / workspace:
   hivemind whoami                          Show current user, org, workspace.
@@ -6121,8 +6152,8 @@ async function main() {
     const code = await runUpdate({ dryRun: hasFlag(args.slice(1), "--dry-run") });
     process.exit(code);
   }
-  if (cmd === "skilify") {
-    runSkilifyCommand(args.slice(1));
+  if (cmd === "skillify") {
+    runSkillifyCommand(args.slice(1));
     return;
   }
   if (cmd === "embeddings") {

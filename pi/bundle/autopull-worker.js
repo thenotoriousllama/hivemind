@@ -51,10 +51,10 @@ var init_index_marker_store = __esm({
   }
 });
 
-// dist/src/skilify/auto-pull.js
-import { existsSync as existsSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join8 } from "node:path";
+// dist/src/skillify/auto-pull.js
+import { existsSync as existsSync8, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { join as join9 } from "node:path";
 
 // dist/src/config.js
 import { readFileSync, existsSync } from "node:fs";
@@ -538,12 +538,12 @@ var DeeplakeApi = class {
   }
 };
 
-// dist/src/skilify/pull.js
-import { existsSync as existsSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync4, mkdirSync as mkdirSync4, renameSync as renameSync2, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { dirname as dirname2, join as join7 } from "node:path";
+// dist/src/skillify/pull.js
+import { existsSync as existsSync7, readFileSync as readFileSync5, writeFileSync as writeFileSync4, mkdirSync as mkdirSync4, renameSync as renameSync3, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname as dirname2, join as join8 } from "node:path";
 
-// dist/src/skilify/skill-writer.js
+// dist/src/skillify/skill-writer.js
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, readdirSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join4 } from "node:path";
@@ -604,18 +604,46 @@ function parseFrontmatter(text) {
   return { fm, body };
 }
 
-// dist/src/skilify/manifest.js
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
+// dist/src/skillify/manifest.js
+import { existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { dirname, join as join6 } from "node:path";
+
+// dist/src/skillify/legacy-migration.js
+import { existsSync as existsSync4, renameSync } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname, join as join5 } from "node:path";
+import { join as join5 } from "node:path";
+var dlog = (msg) => log("skillify-migrate", msg);
+var attempted = false;
+function migrateLegacyStateDir() {
+  if (attempted)
+    return;
+  attempted = true;
+  const root = join5(homedir4(), ".deeplake", "state");
+  const legacy = join5(root, "skilify");
+  const current = join5(root, "skillify");
+  if (!existsSync4(legacy))
+    return;
+  if (existsSync4(current))
+    return;
+  try {
+    renameSync(legacy, current);
+    dlog(`migrated ${legacy} -> ${current}`);
+  } catch (err) {
+    dlog(`migration failed (${err.code ?? "unknown"}); leaving legacy dir in place`);
+  }
+}
+
+// dist/src/skillify/manifest.js
 function emptyManifest() {
   return { version: 1, entries: [] };
 }
 function manifestPath() {
-  return join5(homedir4(), ".deeplake", "state", "skilify", "pulled.json");
+  return join6(homedir5(), ".deeplake", "state", "skillify", "pulled.json");
 }
 function loadManifest(path = manifestPath()) {
-  if (!existsSync4(path))
+  migrateLegacyStateDir();
+  if (!existsSync5(path))
     return emptyManifest();
   let raw;
   try {
@@ -665,10 +693,11 @@ function loadManifest(path = manifestPath()) {
   }
 }
 function saveManifest(m, path = manifestPath()) {
+  migrateLegacyStateDir();
   mkdirSync3(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync3(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
-  renameSync(tmp, path);
+  renameSync2(tmp, path);
 }
 function recordPull(entry, path = manifestPath()) {
   const m = loadManifest(path);
@@ -700,7 +729,7 @@ function pruneOrphanedEntries(path = manifestPath()) {
   const live = [];
   let pruned = 0;
   for (const e of m.entries) {
-    if (existsSync4(join5(e.installRoot, e.dirName))) {
+    if (existsSync5(join6(e.installRoot, e.dirName))) {
       live.push(e);
       continue;
     }
@@ -712,26 +741,26 @@ function pruneOrphanedEntries(path = manifestPath()) {
   return pruned;
 }
 
-// dist/src/skilify/agent-roots.js
-import { existsSync as existsSync5 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join6 } from "node:path";
+// dist/src/skillify/agent-roots.js
+import { existsSync as existsSync6 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join7 } from "node:path";
 function candidates(home) {
   return [
     // agentskills.io shared root — codex installer always creates it,
     // pi reads from it as one of two paths.
-    join6(home, ".agents", "skills"),
+    join7(home, ".agents", "skills"),
     // hermes-specific root, agentskills.io-compatible layout.
-    join6(home, ".hermes", "skills"),
+    join7(home, ".hermes", "skills"),
     // pi's primary root (pi reads from this AND ~/.agents/skills/).
-    join6(home, ".pi", "agent", "skills")
+    join7(home, ".pi", "agent", "skills")
   ];
 }
-function detectAgentSkillsRoots(canonicalRoot, home = homedir5()) {
-  return candidates(home).filter((p) => p !== canonicalRoot && existsSync5(p));
+function detectAgentSkillsRoots(canonicalRoot, home = homedir6()) {
+  return candidates(home).filter((p) => p !== canonicalRoot && existsSync6(p));
 }
 
-// dist/src/skilify/pull.js
+// dist/src/skillify/pull.js
 function assertValidAuthor(author) {
   if (!author)
     throw new Error("author is empty");
@@ -763,15 +792,15 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join7(homedir6(), ".claude", "skills");
+    return join8(homedir7(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join7(cwd, ".claude", "skills");
+  return join8(cwd, ".claude", "skills");
 }
 function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
   const out = [];
   for (const root of agentRoots) {
-    const link = join7(root, dirName);
+    const link = join8(root, dirName);
     let existing;
     try {
       existing = lstatSync2(link);
@@ -871,7 +900,7 @@ function renderFrontmatter(fm) {
   return lines.join("\n");
 }
 function readLocalVersion(path) {
-  if (!existsSync6(path))
+  if (!existsSync7(path))
     return null;
   try {
     const text = readFileSync5(path, "utf-8");
@@ -960,8 +989,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join7(root, dirName);
-    const skillFile = join7(skillDir, "SKILL.md");
+    const skillDir = join8(root, dirName);
+    const skillFile = join8(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -973,9 +1002,9 @@ async function runPull(opts) {
     let manifestError;
     if (action === "wrote") {
       mkdirSync4(skillDir, { recursive: true });
-      if (existsSync6(skillFile)) {
+      if (existsSync7(skillFile)) {
         try {
-          renameSync2(skillFile, `${skillFile}.bak`);
+          renameSync3(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
@@ -1017,13 +1046,13 @@ async function runPull(opts) {
   return summary;
 }
 
-// dist/src/skilify/auto-pull.js
-var log3 = (msg) => log("skilify-autopull", msg);
+// dist/src/skillify/auto-pull.js
+var log3 = (msg) => log("skillify-autopull", msg);
 function stateDir() {
-  return join8(homedir7(), ".deeplake", "state", "skilify");
+  return join9(homedir8(), ".deeplake", "state", "skillify");
 }
 function timestampFile() {
-  return join8(stateDir(), "autopull-last-run.json");
+  return join9(stateDir(), "autopull-last-run.json");
 }
 var DEFAULT_INTERVAL_MIN = 30;
 var DEFAULT_TIMEOUT_MS = 5e3;
@@ -1037,8 +1066,9 @@ function readIntervalMs() {
   return Math.trunc(n) * 6e4;
 }
 function readLastRun() {
+  migrateLegacyStateDir();
   const path = timestampFile();
-  if (!existsSync7(path))
+  if (!existsSync8(path))
     return null;
   try {
     const raw = readFileSync6(path, "utf-8");
@@ -1051,12 +1081,13 @@ function readLastRun() {
   }
 }
 function writeLastRun(lastRunMs) {
+  migrateLegacyStateDir();
   const dir = stateDir();
   const path = timestampFile();
   mkdirSync5(dir, { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync5(tmp, JSON.stringify({ lastRunMs }));
-  renameSync3(tmp, path);
+  renameSync4(tmp, path);
 }
 function withTimeout(p, ms) {
   let timer = null;
@@ -1127,7 +1158,7 @@ async function maybeAutoPull(deps = {}) {
   }
 }
 
-// dist/src/skilify/autopull-worker.js
+// dist/src/skillify/autopull-worker.js
 void (async () => {
   try {
     await maybeAutoPull();

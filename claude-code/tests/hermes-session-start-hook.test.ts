@@ -67,7 +67,7 @@ beforeEach(() => {
   // Disable auto-pull during this test: maybeAutoPull would otherwise issue
   // a third SQL query (against `skills`) through the same DeeplakeApi mock,
   // breaking call-count assertions. The auto-pull module's behaviour is
-  // covered exhaustively in skilify-auto-pull.test.ts, so the hook tests
+  // covered exhaustively in skillify-auto-pull.test.ts, so the hook tests
   // never need it active.
   process.env.HIVEMIND_AUTOPULL_DISABLED = "1";
 });

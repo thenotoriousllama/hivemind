@@ -32,7 +32,7 @@ import {
   releaseLock,
 } from "../summary-state.js";
 import { bundleDirFromImportMeta, spawnCursorWikiWorker, wikiLog } from "./spawn-wiki-worker.js";
-import { tryStopCounterTrigger } from "../../skilify/triggers.js";
+import { tryStopCounterTrigger } from "../../skillify/triggers.js";
 import type { Config } from "../../config.js";
 const log = (msg: string) => _log("cursor-capture", msg);
 
@@ -166,13 +166,13 @@ async function main(): Promise<void> {
 
   maybeTriggerPeriodicSummary(sessionId, cwd, config);
 
-  // Skilify Stop counter — afterAgentResponse is the assistant-complete event.
+  // Skillify Stop counter — afterAgentResponse is the assistant-complete event.
   // Same guards as the wiki periodic trigger: don't fire when this capture
-  // is running INSIDE the wiki/skilify workers (their spawned CLI inherits
+  // is running INSIDE the wiki/skillify workers (their spawned CLI inherits
   // env vars and would otherwise loop).
   if (event === "afterAgentResponse" &&
       process.env.HIVEMIND_WIKI_WORKER !== "1" &&
-      process.env.HIVEMIND_SKILIFY_WORKER !== "1") {
+      process.env.HIVEMIND_SKILLIFY_WORKER !== "1") {
     tryStopCounterTrigger({
       config,
       cwd,

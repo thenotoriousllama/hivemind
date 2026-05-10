@@ -57,7 +57,7 @@ import { deeplakeClientHeader } from "../../src/utils/client-header.js";
 // memory ∪ sessions, path filters, JSONB normalization, virtual /index.md).
 import { searchDeeplakeTables, buildGrepSearchOptions, compileGrepRegex, normalizeContent, type GrepMatchParams } from "../../src/shell/grep-core.js";
 import { readVirtualPathContent } from "../../src/hooks/virtual-table-query.js";
-// Resolve sibling skilify-worker.js path at runtime via import.meta.url. The
+// Resolve sibling skillify-worker.js path at runtime via import.meta.url. The
 // openclaw plugin is bundled to openclaw/dist/index.js, then installed to
 // ~/.openclaw/extensions/hivemind/dist/index.js by install-openclaw.ts. The
 // worker bundle is its sibling at the same level.
@@ -67,7 +67,7 @@ import { homedir, tmpdir } from "node:os";
 import {
   existsSync as fsExists, mkdirSync as fsMkdir, openSync as fsOpen,
   closeSync as fsClose, writeFileSync as fsWriteFile, constants as fsConstants,
-  readFileSync as fsReadFile,
+  readFileSync as fsReadFile, renameSync as fsRename,
 } from "node:fs";
 import { createHash } from "node:crypto";
 // node:child_process is stubbed in the main openclaw bundle (see esbuild.config.mjs
@@ -299,11 +299,11 @@ let captureEnabled = true;
 const capturedCounts = new Map<string, number>();
 const fallbackSessionId = crypto.randomUUID();
 
-// --- Skilify worker spawn (mirror of src/skilify/spawn-skilify-worker.ts) ---
+// --- Skillify worker spawn (mirror of src/skillify/spawn-skillify-worker.ts) ---
 //
-// OpenClaw can't import the shared skilify TS modules — its bundle is
+// OpenClaw can't import the shared skillify TS modules — its bundle is
 // stubbed for child_process and code-splits the gateway. Inline the spawn
-// shape here, keyed off the bundled sibling `skilify-worker.js`. Mining is
+// shape here, keyed off the bundled sibling `skillify-worker.js`. Mining is
 // fired once per agent_end with a per-projectKey lock; per the assumption
 // "one openclaw session at a time", subsequent agent_ends within the same
 // session are skipped by the lock and that's fine — the worker advances
@@ -312,12 +312,30 @@ const fallbackSessionId = crypto.randomUUID();
 
 const __openclaw_filename = fileURLToPath(import.meta.url);
 const __openclaw_dirname = dirnamePath(__openclaw_filename);
-const OPENCLAW_SKILIFY_WORKER_PATH = joinPath(__openclaw_dirname, "skilify-worker.js");
-const OPENCLAW_SKILIFY_STATE_DIR = joinPath(homedir(), ".deeplake", "state", "skilify");
+const OPENCLAW_SKILLIFY_WORKER_PATH = joinPath(__openclaw_dirname, "skillify-worker.js");
+const OPENCLAW_SKILLIFY_STATE_DIR = joinPath(homedir(), ".deeplake", "state", "skillify");
+const OPENCLAW_SKILLIFY_LEGACY_STATE_DIR = joinPath(homedir(), ".deeplake", "state", "skilify");
+
+// One-shot rename of the pre-rename state dir. Mirrors src/skillify/legacy-migration.ts;
+// inlined because openclaw is a self-contained bundle that can't import from src/skillify.
+// Must run BEFORE any fsMkdir on OPENCLAW_SKILLIFY_STATE_DIR — once the new dir exists,
+// the migration becomes a no-op and the legacy data is orphaned.
+let openclawSkillifyMigrationAttempted = false;
+function migrateOpenclawSkillifyLegacyStateDir(): void {
+  if (openclawSkillifyMigrationAttempted) return;
+  openclawSkillifyMigrationAttempted = true;
+  try {
+    if (!fsExists(OPENCLAW_SKILLIFY_LEGACY_STATE_DIR)) return;
+    if (fsExists(OPENCLAW_SKILLIFY_STATE_DIR)) return;
+    fsRename(OPENCLAW_SKILLIFY_LEGACY_STATE_DIR, OPENCLAW_SKILLIFY_STATE_DIR);
+  } catch {
+    // EXDEV / EPERM / EBUSY — leave legacy dir, start fresh.
+  }
+}
 
 function deriveOpenclawProjectKey(channel: string): { key: string; project: string } {
   const project = channel || "openclaw";
-  // sha1(channel) — same shape as deriveProjectKey in src/skilify/state.ts
+  // sha1(channel) — same shape as deriveProjectKey in src/skillify/state.ts
   // but anchored on the openclaw channel string instead of a filesystem cwd.
   // Two openclaw channels with the same name (e.g. shared workspace channel)
   // share a project_key, which is intentional: their skills cluster together.
@@ -325,10 +343,11 @@ function deriveOpenclawProjectKey(channel: string): { key: string; project: stri
   return { key, project };
 }
 
-function tryAcquireOpenclawSkilifyLock(projectKey: string): boolean {
+function tryAcquireOpenclawSkillifyLock(projectKey: string): boolean {
   try {
-    fsMkdir(OPENCLAW_SKILIFY_STATE_DIR, { recursive: true });
-    const lockPath = joinPath(OPENCLAW_SKILIFY_STATE_DIR, `${projectKey}.worker.lock`);
+    migrateOpenclawSkillifyLegacyStateDir();
+    fsMkdir(OPENCLAW_SKILLIFY_STATE_DIR, { recursive: true });
+    const lockPath = joinPath(OPENCLAW_SKILLIFY_STATE_DIR, `${projectKey}.worker.lock`);
     const fd = fsOpen(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY);
     fsClose(fd);
     return true;
@@ -347,7 +366,7 @@ interface OpenclawSpawnArgs {
 }
 
 /**
- * Pick a delegate gate-CLI for openclaw skilify mining.
+ * Pick a delegate gate-CLI for openclaw skillify mining.
  *
  * Openclaw is a gateway, not an agent CLI — there's no `openclaw -p <prompt>`
  * binary the gate-runner can invoke. Mining sessions still need a gate call
@@ -377,26 +396,26 @@ function detectOpenclawGateAgent(): GateAgent | null {
   return null;
 }
 
-function spawnOpenclawSkilifyWorker(a: OpenclawSpawnArgs): void {
-  if (!fsExists(OPENCLAW_SKILIFY_WORKER_PATH)) {
-    a.loggerWarn?.(`skilify worker missing at ${OPENCLAW_SKILIFY_WORKER_PATH} — reinstall openclaw plugin`);
+function spawnOpenclawSkillifyWorker(a: OpenclawSpawnArgs): void {
+  if (!fsExists(OPENCLAW_SKILLIFY_WORKER_PATH)) {
+    a.loggerWarn?.(`skillify worker missing at ${OPENCLAW_SKILLIFY_WORKER_PATH} — reinstall openclaw plugin`);
     return;
   }
   const gateAgent = detectOpenclawGateAgent();
   if (!gateAgent) {
-    a.loggerWarn?.(`skilify spawn: no delegate gate CLI found on PATH (need one of: claude, codex, cursor-agent, hermes, pi). Mining skipped.`);
+    a.loggerWarn?.(`skillify spawn: no delegate gate CLI found on PATH (need one of: claude, codex, cursor-agent, hermes, pi). Mining skipped.`);
     return;
   }
   const { key: projectKey, project } = deriveOpenclawProjectKey(a.channel);
-  if (!tryAcquireOpenclawSkilifyLock(projectKey)) {
+  if (!tryAcquireOpenclawSkillifyLock(projectKey)) {
     // A worker is already running for this project — skip (next agent_end may
     // re-fire after the worker releases the lock, or the worker watermark
     // advance makes the re-fire a no-op).
     return;
   }
-  const tmpDir = joinPath(tmpdir(), `deeplake-skilify-openclaw-${projectKey}-${Date.now()}`);
+  const tmpDir = joinPath(tmpdir(), `deeplake-skillify-openclaw-${projectKey}-${Date.now()}`);
   try { fsMkdir(tmpDir, { recursive: true, mode: 0o700 }); }
-  catch (e: any) { a.loggerWarn?.(`skilify spawn: mkdir failed: ${e?.message ?? e}`); return; }
+  catch (e: any) { a.loggerWarn?.(`skillify spawn: mkdir failed: ${e?.message ?? e}`); return; }
   const configPath = joinPath(tmpDir, "config.json");
 
   // install: "global" — openclaw has no per-project filesystem cwd, so written
@@ -424,20 +443,20 @@ function spawnOpenclawSkilifyWorker(a: OpenclawSpawnArgs): void {
     cursorModel: undefined,
     hermesProvider: undefined,
     hermesModel: undefined,
-    skilifyLog: joinPath(homedir(), ".deeplake", "hivemind-openclaw-skilify.log"),
+    skillifyLog: joinPath(homedir(), ".deeplake", "hivemind-openclaw-skillify.log"),
     currentSessionId: a.sessionId,
   };
   try { fsWriteFile(configPath, JSON.stringify(config), { mode: 0o600 }); }
-  catch (e: any) { a.loggerWarn?.(`skilify spawn: config write failed: ${e?.message ?? e}`); return; }
+  catch (e: any) { a.loggerWarn?.(`skillify spawn: config write failed: ${e?.message ?? e}`); return; }
 
   try {
-    realSpawn(process.execPath, [OPENCLAW_SKILIFY_WORKER_PATH, configPath], {
+    realSpawn(process.execPath, [OPENCLAW_SKILLIFY_WORKER_PATH, configPath], {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, HIVEMIND_SKILIFY_WORKER: "1", HIVEMIND_CAPTURE: "false" },
+      env: { ...process.env, HIVEMIND_SKILLIFY_WORKER: "1", HIVEMIND_CAPTURE: "false" },
     }).unref();
   } catch (e: any) {
-    a.loggerWarn?.(`skilify spawn: spawn failed: ${e?.message ?? e}`);
+    a.loggerWarn?.(`skillify spawn: spawn failed: ${e?.message ?? e}`);
   }
 }
 
@@ -642,17 +661,17 @@ export default definePluginEntry({
         handler: async () => {
           const { ensureHivemindAllowlisted } = await loadSetupConfig();
           const result = ensureHivemindAllowlisted();
-          // Phase C: surface skilify CLI in setup output. OpenClaw users have no
+          // Phase C: surface skillify CLI in setup output. OpenClaw users have no
           // session-start banner equivalent and no Bash tool — without this hint
           // they can't discover that mining runs in the background or that they
           // can pull teammates' skills. The CLI itself runs from the user's
           // terminal, not from the agent.
-          const skilifyHint = `\n\nSkill mining (skilify) runs in the background after each turn — your conversations get crystallised into reusable skills automatically. From your terminal:\n  hivemind skilify status   — see what's been mined\n  hivemind skilify pull     — fetch teammates' skills`;
+          const skillifyHint = `\n\nSkill mining (skillify) runs in the background after each turn — your conversations get crystallised into reusable skills automatically. From your terminal:\n  hivemind skillify status   — see what's been mined\n  hivemind skillify pull     — fetch teammates' skills`;
           if (result.status === "already-set") {
-            return { text: `✅ Hivemind tools are already enabled in your allowlist.\n\nNo changes needed — memory tools are available to the agent.${skilifyHint}` };
+            return { text: `✅ Hivemind tools are already enabled in your allowlist.\n\nNo changes needed — memory tools are available to the agent.${skillifyHint}` };
           }
           if (result.status === "added") {
-            return { text: `✅ Added "hivemind" to your tool allowlist.\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index.\n\nBackup of previous config: ${result.backupPath}${skilifyHint}` };
+            return { text: `✅ Added "hivemind" to your tool allowlist.\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index.\n\nBackup of previous config: ${result.backupPath}${skillifyHint}` };
           }
           return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath} and add "hivemind" to the "alsoAllow" array under "tools".` };
         },
@@ -1119,13 +1138,13 @@ export default definePluginEntry({
 
           logger.info?.(`Auto-captured ${newMessages.length} messages`);
 
-          // Skilify: fire the worker after capture so the just-stored messages
+          // Skillify: fire the worker after capture so the just-stored messages
           // become candidates for skill mining. Lock-protected, fire-and-forget,
           // never blocks the agent. Worker reads from the sessions table we
           // just wrote to. Non-fatal: a spawn failure here only loses one
           // mining attempt, never breaks capture.
           try {
-            spawnOpenclawSkilifyWorker({
+            spawnOpenclawSkillifyWorker({
               apiUrl: cfg.apiUrl,
               token: cfg.token,
               orgId: cfg.orgId,
@@ -1133,10 +1152,10 @@ export default definePluginEntry({
               userName: cfg.userName,
               channel: ev.channel || "openclaw",
               sessionId: sid,
-              loggerWarn: (msg) => logger.error(`Skilify spawn: ${msg}`),
+              loggerWarn: (msg) => logger.error(`Skillify spawn: ${msg}`),
             });
           } catch (e: any) {
-            logger.error(`Skilify spawn threw: ${e?.message ?? e}`);
+            logger.error(`Skillify spawn threw: ${e?.message ?? e}`);
           }
         } catch (err) {
           logger.error(`Auto-capture failed: ${err instanceof Error ? err.message : String(err)}`);

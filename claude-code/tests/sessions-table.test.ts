@@ -268,7 +268,7 @@ describe("session files are read-only", () => {
   });
 });
 
-describe("ensureSkillsTable schema (skilify provenance table)", () => {
+describe("ensureSkillsTable schema (skillify provenance table)", () => {
   it("creates skills table with all expected columns when missing", async () => {
     const { DeeplakeApi } = await import("../../src/deeplake-api.js");
     const api = new DeeplakeApi("token", "https://api.test", "org", "ws", "memory");

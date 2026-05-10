@@ -2,7 +2,7 @@
 
 Before merging any new feature into `main` (and especially before cutting an
 npm release), walk through this list. Every item here corresponds to a real
-gap that has slipped past us in past PRs — most recently the skilify
+gap that has slipped past us in past PRs — most recently the skillify
 discovery + cherry-pick e2e gap on PR #98.
 
 The list is **the same regardless of feature size**. Don't skip sections
@@ -62,7 +62,7 @@ For every new SQL-touching surface:
 - [ ] Run with a **missing table name** and confirm graceful fallback (no stack trace)
 - [ ] Run with an **invalid identifier** (`bad-name-with-dashes`) and confirm `sqlIdent` rejects it before any SQL fires
 
-Reference: `/tmp/skilify-pull-e2e.mjs` (65/65 across 15 scenarios for `pull`).
+Reference: `/tmp/skillify-pull-e2e.mjs` (65/65 across 15 scenarios for `pull`).
 Lives outside the repo by design — the e2e matrix is per-feature scratch.
 
 ---
@@ -71,7 +71,7 @@ Lives outside the repo by design — the e2e matrix is per-feature scratch.
 
 Hivemind ships into **six** agent surfaces. A feature is not done until
 every applicable surface is covered. Skipping one because "it's the
-weird one" is how skilify shipped to Pi and OpenClaw blind on PR #98 —
+weird one" is how skillify shipped to Pi and OpenClaw blind on PR #98 —
 the prior version of this section listed only the four hook-driven
 agents and quietly excluded the other two.
 
@@ -81,8 +81,8 @@ agents and quietly excluded the other two.
 | Codex       | `src/hooks/codex/`, `codex/bundle/` | full | ✅ | ✅ session-start.ts | npm bin via `$CODEX_PLUGIN_ROOT` |
 | Cursor      | `src/hooks/cursor/`, `cursor/bundle/` | session-start + end + capture + pre-tool-use | ✅ | ✅ session-start.ts | no slash command surface |
 | Hermes      | `src/hooks/hermes/`, `hermes/bundle/` | analogous to cursor | ✅ | ✅ session-start.ts | gate uses OpenRouter (`hermes -z`), NOT claude |
-| **Pi**      | `pi/extension-source/hivemind.ts` (raw .ts, no bundle) | full (session_start, input, tool_result, message_end, session_shutdown) | ✅ via `pi/bundle/skilify-worker.js` spawned from session_shutdown | ✅ inline in `CONTEXT_PREAMBLE` | self-contained extension; pi compiles the .ts at load time |
-| **OpenClaw**| `openclaw/src/index.ts`, `openclaw/skills/SKILL.md` | `before_prompt_build`, `before_agent_start`, `agent_end` | ✅ via `openclaw/dist/skilify-worker.js` spawned from `agent_end` | ✅ in `openclaw/skills/SKILL.md` | gateway plugin: captures sessions to the same `sessions` table; bypasses esbuild's `child_process` stub via `createRequire(import.meta.url)` |
+| **Pi**      | `pi/extension-source/hivemind.ts` (raw .ts, no bundle) | full (session_start, input, tool_result, message_end, session_shutdown) | ✅ via `pi/bundle/skillify-worker.js` spawned from session_shutdown | ✅ inline in `CONTEXT_PREAMBLE` | self-contained extension; pi compiles the .ts at load time |
+| **OpenClaw**| `openclaw/src/index.ts`, `openclaw/skills/SKILL.md` | `before_prompt_build`, `before_agent_start`, `agent_end` | ✅ via `openclaw/dist/skillify-worker.js` spawned from `agent_end` | ✅ in `openclaw/skills/SKILL.md` | gateway plugin: captures sessions to the same `sessions` table; bypasses esbuild's `child_process` stub via `createRequire(import.meta.url)` |
 
 **Mining (worker firing on session end)** applies wherever the agent
 captures sessions — which is all six. Earlier drafts of this section
@@ -90,8 +90,8 @@ incorrectly described OpenClaw mining as "N/A by design"; OpenClaw
 does in fact capture sessions to the same `sessions` Deeplake table
 (see `openclaw/src/index.ts:903` agent_end hook), and the worker can
 mine them just like any other agent. The wiring lives at
-`openclaw/src/index.ts:spawnOpenclawSkilifyWorker` and fires from the
-agent_end hook after each capture. Bundle: `openclaw/dist/skilify-worker.js`
+`openclaw/src/index.ts:spawnOpenclawSkillifyWorker` and fires from the
+agent_end hook after each capture. Bundle: `openclaw/dist/skillify-worker.js`
 (separate esbuild entry, isolated from the gateway's child_process
 stub via `createRequire(import.meta.url)`). E2E verified live against
 Deeplake plugin_test_1/test1 sandbox: 6/6 PASS, real skill produced
@@ -122,7 +122,7 @@ For every feature that runs inside a hook (worker, capture, session-end):
 - [ ] Verify the worker / hook actually fires for every agent (check Deeplake table for the inserted row, not just "no error")
 - [ ] If the feature uses async hooks (Stop / SessionEnd), check both: parent process exits before async work completes is a real risk and has bitten us before (`claude -p` does not block on Stop hook)
 
-Reference: `/tmp/skilify-e2e-matrix.mjs` exercised gate CREATE / MERGE / SKIP across the four hook-driven agents — but did NOT cover `pull` (gap closed by the dedicated pull e2e in Section 2), and did NOT cover Pi or OpenClaw at all (gap closed by the Pi inject + OpenClaw SKILL.md additions in commit `9d74db6`).
+Reference: `/tmp/skillify-e2e-matrix.mjs` exercised gate CREATE / MERGE / SKIP across the four hook-driven agents — but did NOT cover `pull` (gap closed by the dedicated pull e2e in Section 2), and did NOT cover Pi or OpenClaw at all (gap closed by the Pi inject + OpenClaw SKILL.md additions in commit `9d74db6`).
 
 ---
 
@@ -138,8 +138,8 @@ layers, mirroring the existing `auth-login` family:
 - [ ] **Slash command (OPTIONAL — decide explicitly)** — `claude-code/commands/<feature>.md` and `codex/commands/<feature>.md` register `/hivemind:<feature>` for user-typed invocation. Only add when there is a clear UX reason (e.g. parity with `/hivemind:login` for a top-level user action). If you do add one:
   - Use `node "${CLAUDE_PLUGIN_ROOT}/bundle/cli.js" <feature> $ARGUMENTS` (CC) and `node "$CODEX_PLUGIN_ROOT/bundle/cli.js" <feature> $ARGUMENTS` (Codex). **Never** the bare-binary form `hivemind <feature> $ARGUMENTS` — it assumes `npm i -g @deeplake/hivemind` which marketplace-installed users do not have, so the slash silently breaks
   - Cursor and Hermes do not support slash commands at all — those agents go through the CLI or natural-language inject only. Don't write slash commands you cannot deliver across all four agents unless the asymmetry is intentional
-  - If the agent already has full coverage via SessionStart inject + `hivemind <feature>` CLI, the slash is pure UX and can be skipped (skilify chose to skip it on PR #98 — agent autonomous discovery + CLI cover the ground)
-- [ ] **Bundle-scan guard test** — a vitest scans the SHIPPED `*/bundle/session-start.js` files and asserts the new section + the most-important flags are present. Protects against silent regressions on rebuild (see `claude-code/tests/skilify-session-start-injection.test.ts`)
+  - If the agent already has full coverage via SessionStart inject + `hivemind <feature>` CLI, the slash is pure UX and can be skipped (skillify chose to skip it on PR #98 — agent autonomous discovery + CLI cover the ground)
+- [ ] **Bundle-scan guard test** — a vitest scans the SHIPPED `*/bundle/session-start.js` files and asserts the new section + the most-important flags are present. Protects against silent regressions on rebuild (see `claude-code/tests/skillify-session-start-injection.test.ts`)
 - [ ] Optional: dedicated SKILL.md if the feature warrants a skill (Claude Code skills auto-load on description match)
 
 If the feature is invocable but undiscoverable, no agent will surface it
@@ -165,7 +165,7 @@ into SQL / shell / filesystem:
 
 ## 6. Backend quirks (Deeplake-specific)
 
-- [ ] **UPDATE coalescing**: two rapid UPDATEs on the same row drop one silently (`row_count: 0` even though API returns 200 OK). Solution: single combined UPDATE per RMW, or append-only INSERT with `ORDER BY version DESC LIMIT 1` reads (skilify pattern)
+- [ ] **UPDATE coalescing**: two rapid UPDATEs on the same row drop one silently (`row_count: 0` even though API returns 200 OK). Solution: single combined UPDATE per RMW, or append-only INSERT with `ORDER BY version DESC LIMIT 1` reads (skillify pattern)
 - [ ] **Lazy table creation**: first INSERT against a missing table should `CREATE TABLE IF NOT EXISTS` then retry. Test path: drop the table, run the feature, confirm it self-heals
 - [ ] **Missing-table error matching**: use the project's `isMissingTableError` regex. Do NOT match the bare phrase "does not exist" — that also fires for column errors
 - [ ] **Lookup-index creation**: idempotent `CREATE INDEX IF NOT EXISTS` calls, but tolerate the duplicate-key warning that fires when two parallel sessions race to create the same index
@@ -196,8 +196,8 @@ For every shipped artifact under `*/bundle/`:
 
 Examples in tree:
 - `claude-code/tests/wiki-worker-upload-sql.test.ts` — rejects standalone `UPDATE … SET description = …`
-- `claude-code/tests/skilify-bundle-scan.test.ts` — per-agent skilify-worker presence
-- `claude-code/tests/skilify-session-start-injection.test.ts` — per-agent SKILLS injection
+- `claude-code/tests/skillify-bundle-scan.test.ts` — per-agent skillify-worker presence
+- `claude-code/tests/skillify-session-start-injection.test.ts` — per-agent SKILLS injection
 - `claude-code/tests/periodic-summary-bundles.test.ts` — lock-acquire wiring + flag rename
 
 ---
@@ -228,16 +228,16 @@ Examples in tree:
 
 ---
 
-## What we missed on PR #98 (skilify), retrospectively
+## What we missed on PR #98 (skillify), retrospectively
 
-So this checklist is grounded, not theoretical. On the original skilify PR
+So this checklist is grounded, not theoretical. On the original skillify PR
 we passed every section EXCEPT:
 
 - **Section 2** — only the gate write path was e2e-tested; `pull --user`, `pull --users`, `pull --all-users`, `pull --to global`, `pull --dry-run`, `pull --force`, positional name, SQL injection, missing table, invalid identifier all relied on mocked unit tests until we did the dedicated pull e2e (65 assertions across 15 scenarios)
-- **Section 4** — the SessionStart injection was never extended for skilify, even though `auth-login` already had its parallel section. All four agents shipped without any way to discover `hivemind skilify pull --user X` or its variants. Closed by commits `64b25eb` + `e5c5987`.
-- **Section 4 (slash command)** — initial slash command files (`claude-code/commands/skilify.md`, `codex/commands/skilify.md`) used the bare-binary form `hivemind skilify $ARGUMENTS`, which silently fails for marketplace-installed users (no global `hivemind` bin). After deciding the SessionStart inject + CLI cover the ground, both files were removed rather than fixed — keeping the surface honest across the 4 agents (Cursor and Hermes never had slash commands anyway). Reviewer Kaghni surfaced this on PR comment 3196839552.
+- **Section 4** — the SessionStart injection was never extended for skillify, even though `auth-login` already had its parallel section. All four agents shipped without any way to discover `hivemind skillify pull --user X` or its variants. Closed by commits `64b25eb` + `e5c5987`.
+- **Section 4 (slash command)** — initial slash command files (`claude-code/commands/skillify.md`, `codex/commands/skillify.md`) used the bare-binary form `hivemind skillify $ARGUMENTS`, which silently fails for marketplace-installed users (no global `hivemind` bin). After deciding the SessionStart inject + CLI cover the ground, both files were removed rather than fixed — keeping the surface honest across the 4 agents (Cursor and Hermes never had slash commands anyway). Reviewer Kaghni surfaced this on PR comment 3196839552.
 - **Section 3 (per-agent matrix scope)** — the matrix in this checklist initially listed only **four** agents (CC / Codex / Cursor / Hermes). Pi has the full session lifecycle (`session_start` … `session_shutdown`) via its extension API and was simply forgotten. OpenClaw has a different model (gateway, not session runner) but its agent-facing SKILL.md was also untouched. Both were closed when the user asked "Abbiamo coperto anche OpenClaw e Pi?" and forced the surface to grow from 4 to 6. The matrix table in Section 3 now explicitly enumerates all six.
-- **Section 3 (mistake about OpenClaw mining being "N/A by design")** — the first revision of the matrix table claimed OpenClaw mining was "N/A by design — gateway, no sessions to mine." This was wrong: `openclaw/src/index.ts:903` hooks `agent_end` and writes captured messages to the same `sessions` Deeplake table CC/Codex/Cursor/Hermes/Pi share. The user caught this by asking "how are we saving the sessions with openclaw?" — once forced to read the source, the gap was obvious. Fixed by adding `spawnOpenclawSkilifyWorker` and a sibling `openclaw/dist/skilify-worker.js` bundle (separate esbuild entry, runtime spawn via `createRequire(import.meta.url)` to bypass the main bundle's `child_process` stub). E2E verified: real skill produced in 20.7s against the live Deeplake sandbox.
+- **Section 3 (mistake about OpenClaw mining being "N/A by design")** — the first revision of the matrix table claimed OpenClaw mining was "N/A by design — gateway, no sessions to mine." This was wrong: `openclaw/src/index.ts:903` hooks `agent_end` and writes captured messages to the same `sessions` Deeplake table CC/Codex/Cursor/Hermes/Pi share. The user caught this by asking "how are we saving the sessions with openclaw?" — once forced to read the source, the gap was obvious. Fixed by adding `spawnOpenclawSkillifyWorker` and a sibling `openclaw/dist/skillify-worker.js` bundle (separate esbuild entry, runtime spawn via `createRequire(import.meta.url)` to bypass the main bundle's `child_process` stub). E2E verified: real skill produced in 20.7s against the live Deeplake sandbox.
 
 Five gaps caught only because the user asked the right cynical
 questions ("ha funzionato tutto davvero?" / "will cc codex etc know?" /

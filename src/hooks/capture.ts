@@ -21,7 +21,7 @@ import {
   releaseLock,
 } from "./summary-state.js";
 import { bundleDirFromImportMeta, spawnWikiWorker, wikiLog } from "./spawn-wiki-worker.js";
-import { tryStopCounterTrigger } from "../skilify/triggers.js";
+import { tryStopCounterTrigger } from "../skillify/triggers.js";
 import { EmbedClient } from "../embeddings/client.js";
 import { embeddingSqlLiteral } from "../embeddings/sql.js";
 import { embeddingsDisabled } from "../embeddings/disable.js";

@@ -13,7 +13,7 @@ import { loadConfig, type Config } from "../config.js";
 import { log as _log } from "../utils/debug.js";
 import { bundleDirFromImportMeta, spawnWikiWorker, wikiLog } from "./spawn-wiki-worker.js";
 import { tryAcquireLock, releaseLock } from "./summary-state.js";
-import { forceSessionEndTrigger } from "../skilify/triggers.js";
+import { forceSessionEndTrigger } from "../skillify/triggers.js";
 
 const log = (msg: string) => _log("session-end", msg);
 
