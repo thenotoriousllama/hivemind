@@ -4749,7 +4749,12 @@ function migrateLegacyStateDir() {
     renameSync(legacy, current);
     dlog(`migrated ${legacy} -> ${current}`);
   } catch (err) {
-    dlog(`migration failed (${err.code ?? "unknown"}); leaving legacy dir in place`);
+    const code = err.code;
+    if (code === "EXDEV" || code === "EPERM") {
+      dlog(`migration failed (${code}); leaving legacy dir in place`);
+      return;
+    }
+    throw err;
   }
 }
 
@@ -5487,7 +5492,7 @@ function showStatus() {
     console.log(`state: (no projects tracked yet)`);
     return;
   }
-  const files = readdirSync4(dir).filter((f) => f.endsWith(".json") && f !== "config.json" && f !== "pulled.json");
+  const files = readdirSync4(dir).filter((f) => f.endsWith(".json") && f !== "config.json" && f !== "pulled.json" && f !== "autopull-last-run.json");
   if (files.length === 0) {
     console.log(`state: (no projects tracked yet)`);
     return;
@@ -5496,8 +5501,9 @@ function showStatus() {
   for (const f of files) {
     try {
       const s = JSON.parse(readFileSync13(join22(dir, f), "utf-8"));
-      const skills = s.skillsGenerated.length === 0 ? "none" : s.skillsGenerated.join(", ");
-      console.log(`  - ${s.project} (counter=${s.counter}, last=${s.lastDate ?? "never"}, skills=${skills})`);
+      const last = typeof s.updatedAt === "number" ? new Date(s.updatedAt).toISOString() : s.lastDate ?? "never";
+      const skills = Array.isArray(s.skillsGenerated) && s.skillsGenerated.length > 0 ? s.skillsGenerated.join(", ") : "none";
+      console.log(`  - ${s.project} (counter=${s.counter}, last=${last}, skills=${skills})`);
     } catch {
     }
   }

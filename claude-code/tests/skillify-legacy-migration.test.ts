@@ -15,6 +15,12 @@ import { join } from "node:path";
 
 let sandboxHome: string;
 let prevHome: string | undefined;
+// Windows `os.homedir()` resolves from USERPROFILE / HOMEDRIVE+HOMEPATH, not
+// HOME. CI is ubuntu-only today but sandboxing all three keeps the test from
+// touching real user state if anyone runs it on Windows locally.
+let prevUserProfile: string | undefined;
+let prevHomeDrive: string | undefined;
+let prevHomePath: string | undefined;
 
 const legacyOf = (h: string) => join(h, ".deeplake", "state", "skilify");
 const currentOf = (h: string) => join(h, ".deeplake", "state", "skillify");
@@ -28,12 +34,24 @@ async function freshMigrate() {
 beforeEach(() => {
   sandboxHome = mkdtempSync(join(tmpdir(), "skillify-migration-"));
   prevHome = process.env.HOME;
+  prevUserProfile = process.env.USERPROFILE;
+  prevHomeDrive = process.env.HOMEDRIVE;
+  prevHomePath = process.env.HOMEPATH;
   process.env.HOME = sandboxHome;
+  process.env.USERPROFILE = sandboxHome;
+  delete process.env.HOMEDRIVE;
+  delete process.env.HOMEPATH;
 });
 
 afterEach(() => {
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
+  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = prevUserProfile;
+  if (prevHomeDrive === undefined) delete process.env.HOMEDRIVE;
+  else process.env.HOMEDRIVE = prevHomeDrive;
+  if (prevHomePath === undefined) delete process.env.HOMEPATH;
+  else process.env.HOMEPATH = prevHomePath;
   // chmodSync the sandbox readable in case a test removed perms; otherwise
   // rmSync hits EACCES on cleanup and leaks the temp dir across runs.
   try { chmodSync(sandboxHome, 0o755); } catch { /* nothing */ }
@@ -111,8 +129,10 @@ describe("migrateLegacyStateDir", () => {
     expect(readFileSync(join(legacy, "config.json"), "utf-8")).toBe('{"scope":"org"}');
   });
 
-  it("swallows renameSync failures and leaves legacy in place", async () => {
-    // Simulate a cross-device link error (EXDEV) by stubbing renameSync.
+  it.each([
+    ["EXDEV", "cross-device link not permitted"],
+    ["EPERM", "operation not permitted"],
+  ])("swallows %s renameSync failure and leaves legacy in place", async (code, message) => {
     // We can't realistically force a true EXDEV inside a single tmpfs in
     // CI, so we mock fs at the module level. Re-import after the mock so
     // the helper picks up the stubbed renameSync.
@@ -126,8 +146,8 @@ describe("migrateLegacyStateDir", () => {
       return {
         ...real,
         renameSync: () => {
-          const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
-          err.code = "EXDEV";
+          const err = new Error(`${code}: ${message}`) as NodeJS.ErrnoException;
+          err.code = code;
           throw err;
         },
       };
@@ -137,6 +157,36 @@ describe("migrateLegacyStateDir", () => {
     expect(() => migrateLegacyStateDir()).not.toThrow();
     expect(existsSync(legacy)).toBe(true);
     expect(readFileSync(join(legacy, "config.json"), "utf-8")).toBe('{"scope":"me"}');
+
+    vi.doUnmock("node:fs");
+  });
+
+  it("re-throws unexpected renameSync failures (EIO, ENOSPC, etc.)", async () => {
+    // EIO/ENOSPC/anything else is NOT in the documented fallback set.
+    // Swallowing it would leave the user on a fresh skillify state dir
+    // with their legacy state silently orphaned. The helper must propagate
+    // so the caller (or the user) sees the real I/O failure.
+    const legacy = legacyOf(sandboxHome);
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "config.json"), '{"scope":"me"}');
+
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const real = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...real,
+        renameSync: () => {
+          const err = new Error("EIO: i/o error") as NodeJS.ErrnoException;
+          err.code = "EIO";
+          throw err;
+        },
+      };
+    });
+    const { migrateLegacyStateDir } = await import("../../src/skillify/legacy-migration.js");
+
+    expect(() => migrateLegacyStateDir()).toThrow(/EIO/);
+    // Legacy still in place — the caller can decide what to do.
+    expect(existsSync(legacy)).toBe(true);
 
     vi.doUnmock("node:fs");
   });

@@ -431,7 +431,12 @@ function migrateLegacyStateDir() {
     renameSync(legacy, current);
     dlog(`migrated ${legacy} -> ${current}`);
   } catch (err) {
-    dlog(`migration failed (${err.code ?? "unknown"}); leaving legacy dir in place`);
+    const code = err.code;
+    if (code === "EXDEV" || code === "EPERM") {
+      dlog(`migration failed (${code}); leaving legacy dir in place`);
+      return;
+    }
+    throw err;
   }
 }
 
@@ -450,6 +455,7 @@ function lockPath(projectKey) {
   return join5(STATE_DIR, `${projectKey}.lock`);
 }
 function readState(projectKey) {
+  migrateLegacyStateDir();
   const p = statePath(projectKey);
   if (!existsSync4(p))
     return null;

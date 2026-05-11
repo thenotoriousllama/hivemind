@@ -74,6 +74,11 @@ export function deriveProjectKey(cwd: string): { key: string; project: string } 
 }
 
 export function readState(projectKey: string): SkillifyState | null {
+  // Workers call readState() first to find the session watermark. Without
+  // migration here, a post-rename run sees an empty `skillify/` dir while
+  // the data still lives at `skilify/<key>.json` — and the worker would
+  // re-mine sessions it has already processed.
+  migrateLegacyStateDir();
   const p = statePath(projectKey);
   if (!existsSync(p)) return null;
   try {

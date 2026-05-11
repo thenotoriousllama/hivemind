@@ -263,6 +263,10 @@ export default defineConfig({
         "src/skillify/extractors/index.ts":  { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/skillify/gate-parser.ts":       { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/skillify/gate-runner.ts":       { statements: 90, branches: 60, functions: 90, lines: 90 },
+        // One-shot legacy state-dir migration. Branches at 80 because the
+        // EXDEV/EPERM error-recovery branch is mocked via vi.doMock("node:fs")
+        // and the uncaught-rethrow branch covers everything else implicitly.
+        "src/skillify/legacy-migration.ts":  { statements: 90, branches: 80, functions: 90, lines: 90 },
         "src/skillify/pull.ts":              { statements: 90, branches: 75, functions: 90, lines: 90 },
         "src/skillify/scope-config.ts":      { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/skillify/skill-writer.ts":      { statements: 90, branches: 80, functions: 90, lines: 90 },

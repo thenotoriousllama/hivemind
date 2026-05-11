@@ -48,12 +48,17 @@ function showStatus(): void {
     return;
   }
   // Filter out skillify's own bookkeeping files. `config.json` is the
-  // scope/team/install settings; `pulled.json` is the unpull manifest —
-  // neither represents a "tracked project" and counting them inflates the
-  // status output (and the `for` loop below would JSON.parse them with the
-  // wrong shape and silently swallow the error).
+  // scope/team/install settings; `pulled.json` is the unpull manifest;
+  // `autopull-last-run.json` is the (now-removed) throttle file that pre-
+  // rename installs may still contain. None of these represent a "tracked
+  // project" and counting them inflates the status output (and the `for`
+  // loop below would JSON.parse them with the wrong shape).
   const files = readdirSync(dir).filter(
-    f => f.endsWith(".json") && f !== "config.json" && f !== "pulled.json",
+    f =>
+      f.endsWith(".json") &&
+      f !== "config.json" &&
+      f !== "pulled.json" &&
+      f !== "autopull-last-run.json",
   );
   if (files.length === 0) {
     console.log(`state: (no projects tracked yet)`);
@@ -63,10 +68,23 @@ function showStatus(): void {
   for (const f of files) {
     try {
       const s = JSON.parse(readFileSync(join(dir, f), "utf-8")) as {
-        project: string; counter: number; lastDate: string | null; skillsGenerated: string[];
+        project: string;
+        counter: number;
+        lastDate?: string | null;
+        updatedAt?: number;
+        skillsGenerated?: string[];
       };
-      const skills = s.skillsGenerated.length === 0 ? "none" : s.skillsGenerated.join(", ");
-      console.log(`  - ${s.project} (counter=${s.counter}, last=${s.lastDate ?? "never"}, skills=${skills})`);
+      // Prefer `updatedAt` (always written on counter bump) over `lastDate`
+      // (only written on a KEEP/MERGE mining verdict). An active project
+      // with no successful mining yet would otherwise show "last=never".
+      const last =
+        typeof s.updatedAt === "number"
+          ? new Date(s.updatedAt).toISOString()
+          : s.lastDate ?? "never";
+      const skills = Array.isArray(s.skillsGenerated) && s.skillsGenerated.length > 0
+        ? s.skillsGenerated.join(", ")
+        : "none";
+      console.log(`  - ${s.project} (counter=${s.counter}, last=${last}, skills=${skills})`);
     } catch { /* skip malformed */ }
   }
 }

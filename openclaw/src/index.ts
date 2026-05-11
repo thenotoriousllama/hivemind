@@ -320,16 +320,23 @@ const OPENCLAW_SKILLIFY_LEGACY_STATE_DIR = joinPath(homedir(), ".deeplake", "sta
 // inlined because openclaw is a self-contained bundle that can't import from src/skillify.
 // Must run BEFORE any fsMkdir on OPENCLAW_SKILLIFY_STATE_DIR — once the new dir exists,
 // the migration becomes a no-op and the legacy data is orphaned.
+//
+// Error policy mirrors the shared helper: only EXDEV/EPERM are swallowed
+// (cross-device link / sandboxed home — legacy dir left in place, new dir
+// starts fresh). Every other code re-throws so the caller sees the real
+// I/O error instead of silently losing user state.
 let openclawSkillifyMigrationAttempted = false;
 function migrateOpenclawSkillifyLegacyStateDir(): void {
   if (openclawSkillifyMigrationAttempted) return;
   openclawSkillifyMigrationAttempted = true;
+  if (!fsExists(OPENCLAW_SKILLIFY_LEGACY_STATE_DIR)) return;
+  if (fsExists(OPENCLAW_SKILLIFY_STATE_DIR)) return;
   try {
-    if (!fsExists(OPENCLAW_SKILLIFY_LEGACY_STATE_DIR)) return;
-    if (fsExists(OPENCLAW_SKILLIFY_STATE_DIR)) return;
     fsRename(OPENCLAW_SKILLIFY_LEGACY_STATE_DIR, OPENCLAW_SKILLIFY_STATE_DIR);
-  } catch {
-    // EXDEV / EPERM / EBUSY — leave legacy dir, start fresh.
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EXDEV" || code === "EPERM") return;
+    throw err;
   }
 }
 
