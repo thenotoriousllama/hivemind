@@ -636,29 +636,6 @@ function buildSessionPath(config: { userName: string; orgName: string; workspace
   return `/sessions/${config.userName}/${config.userName}_${config.orgName}_${config.workspaceId}_${sessionId}.jsonl`;
 }
 
-const RECALL_STOPWORDS = new Set([
-  "the","and","for","are","but","not","you","all","can","had","her","was","one",
-  "our","out","has","have","what","does","like","with","this","that","from","they",
-  "been","will","more","when","who","how","its","into","some","than","them","these",
-  "then","your","just","about","would","could","should","where","which","there",
-  "their","being","each","other",
-]);
-
-/**
- * Extract the signal-bearing tokens from a natural-language prompt so we can
- * feed them into `searchDeeplakeTables` as a multi-word ILIKE. Mirrors the
- * pattern used by claude-code/codex grep intercepts — lowercase, strip
- * non-alphanumeric, drop short words + stopwords, cap at 4 so the SQL doesn't
- * turn into a 20-way OR.
- */
-function extractKeywords(prompt: string): string[] {
-  return prompt.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter(w => w.length >= 3 && !RECALL_STOPWORDS.has(w))
-    .slice(0, 4);
-}
-
 /** Trim a path filter down to a safe virtual prefix. `/` ⇒ unfiltered. */
 function normalizeVirtualPath(p: string | undefined | null): string {
   if (!p || typeof p !== "string") return "/";
@@ -851,9 +828,12 @@ export default definePluginEntry({
             return { text: `✅ Hivemind tools are already enabled in your allowlist.\n\nNo changes needed — memory tools are available to the agent.${skillifyHint}` };
           }
           if (result.status === "added") {
-            return { text: `✅ Added "hivemind" to your tool allowlist.\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index.\n\nBackup of previous config: ${result.backupPath}${skillifyHint}` };
+            const touched: string[] = [];
+            if (result.delta.pluginsAllow) touched.push(`"hivemind" → plugins.allow`);
+            if (result.delta.toolsAlsoAllow) touched.push(`"hivemind" → tools.alsoAllow`);
+            return { text: `✅ Added:\n  • ${touched.join("\n  • ")}\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index. **Capture starts on the next turn — earlier turns are NOT backfilled.**\n\nBackup of previous config: ${result.backupPath}${skillifyHint}` };
           }
-          return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath} and add "hivemind" to the "alsoAllow" array under "tools".` };
+          return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath} and add "hivemind" to BOTH the "allow" array under "plugins" AND the "alsoAllow" array under "tools".` };
         },
       });
 
@@ -1185,7 +1165,24 @@ export default definePluginEntry({
       });
     }
 
-    // Auto-recall: search memory before each turn
+    // before_agent_start handles two narrow paths that legitimately fire
+    // before the agent starts:
+    //   1. Login nudge — when the user isn't authenticated yet, drop the
+    //      device-flow URL into the agent's context so it can show it.
+    //   2. Welcome banner — once after a successful device-flow auth.
+    //
+    // The previous version of this hook also did a proactive recall query
+    // across the memory + sessions tables on every turn. That made every
+    // openclaw turn pay Deeplake's `sessions`-table latency (200ms–10s+)
+    // even when the prompt needed no memory at all, and a slow Deeplake
+    // would block the agent for the full timeout before it could reply.
+    // Other agents (claude-code, codex, cursor, hermes, pi) don't do
+    // this — they let the agent decide when to search by intercepting its
+    // Grep tool calls. Openclaw now matches that pattern: the agent gets
+    // memory via the registered tools (hivemind_search/_read/_index), with
+    // the SKILL.md body in the system prompt directing it to call them
+    // first. See issue #121 for the original report (plugins.allow gating
+    // also fixed in the same PR).
     if (config.autoRecall !== false) {
       hook("before_agent_start", async (event: { prompt?: string }) => {
         if (!event.prompt || event.prompt.length < 5) return;
@@ -1205,53 +1202,8 @@ export default definePluginEntry({
             const orgName = creds?.orgName ?? creds?.orgId ?? "unknown";
             return { prependContext: `\n\n🐝 Welcome to Hivemind!\n\nCurrent org: ${orgName}\n\nYour agents now share memory across sessions, teammates, and machines.\n\nGet started:\n1. Verify sync: spin up multiple sessions and confirm agents share context\n2. Invite a teammate: ask the agent to add them over email\n3. Switch orgs: ask the agent to list or switch your organizations\n\nOne brain for every agent on your team.\n` };
           }
-
-          // Multi-keyword search across BOTH the memory (summaries) and
-          // sessions (raw turns) tables. Uses the same `searchDeeplakeTables`
-          // primitive that claude-code and codex agents reach via their
-          // PreToolUse-intercepted Grep, so recall quality is model-agnostic
-          // (no more first-keyword-only ILIKE on sessions alone).
-          const keywords = extractKeywords(event.prompt);
-          if (!keywords.length) return;
-
-          const grepParams: GrepMatchParams = {
-            pattern: keywords.join(" "),
-            ignoreCase: true,
-            wordMatch: false,
-            filesOnly: false,
-            countOnly: false,
-            lineNumber: false,
-            invertMatch: false,
-            fixedString: true,
-          };
-          const searchOpts = buildGrepSearchOptions(grepParams, "/");
-          searchOpts.limit = 10;
-          const rows = await searchDeeplakeTables(dl, memoryTable, sessionsTable, searchOpts);
-          if (!rows.length) return;
-
-          const recalled = rows
-            .map(r => {
-              const body = normalizeContent(r.path, r.content);
-              return `[${r.path}] ${body.slice(0, 400)}`;
-            })
-            .join("\n\n");
-
-          logger.info?.(`Auto-recalled ${rows.length} memories`);
-          const instruction =
-            "These are raw Hivemind search hits from prior sessions. Each hit is prefixed with its path " +
-            "(e.g. `/summaries/<username>/...`). Different usernames are different people — do NOT merge, " +
-            "alias, or conflate them. If you need more detail, call `hivemind_search` with a more specific " +
-            "query or `hivemind_read` on a specific path. If these hits don't answer the question, say so " +
-            "rather than guessing.";
-          return {
-            prependContext:
-              "\n\n<recalled-memories>\n" +
-              instruction + "\n\n" +
-              recalled +
-              "\n</recalled-memories>\n",
-          };
         } catch (err) {
-          logger.error(`Auto-recall failed: ${err instanceof Error ? err.message : String(err)}`);
+          logger.error(`before_agent_start failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
     }
