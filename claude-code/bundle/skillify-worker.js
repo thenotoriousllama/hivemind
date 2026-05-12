@@ -727,8 +727,6 @@ async function query(sql, retries = 4) {
   return [];
 }
 function authorClause() {
-  if (cfg.scope === "org")
-    return "";
   if (cfg.scope === "team" && cfg.team.length > 0) {
     const list = cfg.team.map((n) => `'${esc2(n)}'`).join(", ");
     return ` AND author IN (${list})`;

@@ -69,7 +69,7 @@ export interface InsertSkillRowArgs {
   install: "project" | "global";
   sourceSessions: string[];
   sourceAgent: string;
-  scope: "me" | "team" | "org";
+  scope: "me" | "team";
   author: string;
   /**
    * Editors in chronological order, including the original author as the

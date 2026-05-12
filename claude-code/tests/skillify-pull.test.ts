@@ -721,7 +721,7 @@ describe("runPull — symlink fan-out (global install only)", () => {
     body: "## Workflow\n\nDeploy.",
     version: 1,
     source_agent: "claude_code",
-    scope: "org",
+    scope: "team",
     author: "alice",
     description: "Deploy skill",
     trigger_text: "When deploying",

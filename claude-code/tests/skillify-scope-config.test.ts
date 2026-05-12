@@ -41,10 +41,22 @@ describe("loadScopeConfig", () => {
     expect(loadScopeConfig()).toEqual({ scope: "team", team: ["alice", "bob"], install: "global" });
   });
 
-  it("normalises scope: any value other than team/org becomes 'me'", () => {
+  it("normalises scope: any value other than team becomes 'me'", () => {
     mkdirSync(STATE_DIR, { recursive: true });
     writeFileSync(CONFIG_PATH, JSON.stringify({ scope: "bogus", team: [], install: "project" }));
     expect(loadScopeConfig().scope).toBe("me");
+  });
+
+  it("silently coerces legacy scope='org' to 'team' on read", () => {
+    // The product surface used to expose `scope = "org"` (no author
+    // filter, mine workspace-wide). We retired that value but a user
+    // who ran `hivemind skillify scope org` once will still have it
+    // sitting in their config.json — the parser narrows it to "team"
+    // instead of falling back to the default "me", since `team` is the
+    // closest non-self surface the worker still supports.
+    mkdirSync(STATE_DIR, { recursive: true });
+    writeFileSync(CONFIG_PATH, JSON.stringify({ scope: "org", team: ["alice"], install: "global" }));
+    expect(loadScopeConfig()).toEqual({ scope: "team", team: ["alice"], install: "global" });
   });
 
   it("filters team to strings only — non-strings are dropped", () => {
@@ -69,10 +81,10 @@ describe("loadScopeConfig", () => {
 describe("saveScopeConfig", () => {
   it("creates the state dir if missing and writes valid JSON", () => {
     try { rmSync(STATE_DIR, { recursive: true }); } catch { /* nothing */ }
-    saveScopeConfig({ scope: "org", team: [], install: "global" });
+    saveScopeConfig({ scope: "team", team: [], install: "global" });
     expect(existsSync(CONFIG_PATH)).toBe(true);
     const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-    expect(parsed).toEqual({ scope: "org", team: [], install: "global" });
+    expect(parsed).toEqual({ scope: "team", team: [], install: "global" });
   });
 
   it("overwrites an existing config", () => {

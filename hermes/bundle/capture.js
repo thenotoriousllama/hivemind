@@ -1412,7 +1412,7 @@ function loadScopeConfig() {
     return DEFAULT;
   try {
     const raw = JSON.parse(readFileSync6(CONFIG_PATH, "utf-8"));
-    const scope = raw.scope === "team" || raw.scope === "org" ? raw.scope : "me";
+    const scope = raw.scope === "team" ? "team" : raw.scope === "org" ? "team" : "me";
     const team = Array.isArray(raw.team) ? raw.team.filter((s) => typeof s === "string") : [];
     const install = raw.install === "global" ? "global" : "project";
     return { scope, team, install };

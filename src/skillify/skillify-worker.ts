@@ -54,7 +54,7 @@ interface WorkerConfig {
    * while `gateAgent` points the gate-runner at a real CLI on the machine.
    */
   gateAgent?: Agent;
-  scope: "me" | "team" | "org";
+  scope: "me" | "team";
   team: string[];
   install: "project" | "global";
   skillsTable: string;
@@ -156,7 +156,11 @@ async function query(sql: string, retries = 4): Promise<Record<string, unknown>[
 }
 
 function authorClause(): string {
-  if (cfg.scope === "org") return "";
+  // scope=team with a populated team list mines sessions authored by
+  // anyone in that list. scope=me (and scope=team with an empty list)
+  // narrows to the current user — there's no whole-workspace mode any
+  // more (the previous `scope === "org"` branch returned an unfiltered
+  // clause; that surface was dropped when we narrowed Scope to me|team).
   if (cfg.scope === "team" && cfg.team.length > 0) {
     const list = cfg.team.map(n => `'${esc(n)}'`).join(", ");
     return ` AND author IN (${list})`;

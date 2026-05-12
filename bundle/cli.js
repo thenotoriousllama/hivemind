@@ -4768,7 +4768,7 @@ function loadScopeConfig() {
     return DEFAULT;
   try {
     const raw = JSON.parse(readFileSync9(CONFIG_PATH2, "utf-8"));
-    const scope = raw.scope === "team" || raw.scope === "org" ? raw.scope : "me";
+    const scope = raw.scope === "team" ? "team" : raw.scope === "org" ? "team" : "me";
     const team = Array.isArray(raw.team) ? raw.team.filter((s) => typeof s === "string") : [];
     const install = raw.install === "global" ? "global" : "project";
     return { scope, team, install };
@@ -5558,8 +5558,8 @@ function showStatus() {
   }
 }
 function setScope(scope) {
-  if (scope !== "me" && scope !== "team" && scope !== "org") {
-    console.error(`Invalid scope '${scope}'. Use one of: me, team, org`);
+  if (scope !== "me" && scope !== "team") {
+    console.error(`Invalid scope '${scope}'. Use one of: me, team`);
     process.exit(1);
   }
   const cfg = loadScopeConfig();
@@ -5638,7 +5638,7 @@ function teamList() {
 function usage() {
   console.log("Usage:");
   console.log("  hivemind skillify                            show current scope, team, install, and per-project state");
-  console.log("  hivemind skillify scope <me|team|org>        set the mining scope");
+  console.log("  hivemind skillify scope <me|team>            set the mining scope");
   console.log("  hivemind skillify install <project|global>   set where new skills are written");
   console.log("  hivemind skillify promote <skill-name>       move a project skill to the global location");
   console.log("  hivemind skillify team add <username>        add a username to the team list");
