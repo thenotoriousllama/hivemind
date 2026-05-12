@@ -53,6 +53,10 @@ export interface SkillWriteResult {
   path: string;
   action: "created" | "merged";
   version: number;
+  /** ISO timestamp of the v=1 row's creation, preserved across merges. */
+  createdAt: string;
+  /** ISO timestamp of this write. */
+  updatedAt: string;
 }
 
 /**
@@ -164,7 +168,7 @@ export function writeNewSkill(args: WriteSkillArgs): SkillWriteResult {
   };
   const text = `${renderFrontmatter(fm)}\n\n${args.body.trim()}\n`;
   writeFileSync(path, text);
-  return { path, action: "created", version: 1 };
+  return { path, action: "created", version: 1, createdAt: now, updatedAt: now };
 }
 
 /**
@@ -195,7 +199,7 @@ export function mergeSkill(args: MergeSkillArgs): SkillWriteResult {
   };
   const text = `${renderFrontmatter(fm)}\n\n${args.body.trim()}\n`;
   writeFileSync(path, text);
-  return { path, action: "merged", version: fm.version };
+  return { path, action: "merged", version: fm.version, createdAt: fm.created_at, updatedAt: fm.updated_at };
 }
 
 /**

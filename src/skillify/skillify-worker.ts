@@ -17,11 +17,11 @@ import { utcTimestamp } from "../utils/debug.js";
 import { deeplakeClientHeader } from "../utils/client-header.js";
 import { extractPairs, SessionRow, Pair } from "./extractors/index.js";
 import {
-  listSkills,
   resolveSkillsRoot,
   writeNewSkill,
   mergeSkill,
 } from "./skill-writer.js";
+import { renderExistingSkillsBlock } from "./existing-skills.js";
 import { insertSkillRow } from "./skills-table.js";
 import { parseVerdict, type Verdict } from "./gate-parser.js";
 import { runGate, type Agent } from "./gate-runner.js";
@@ -232,39 +232,14 @@ function renderPairsBlock(pairs: Pair[]): string {
   return out.join("\n");
 }
 
-interface ExistingSkillSummary {
-  names: string[];
-  block: string;
-}
-
-function renderExistingSkillsBlock(): ExistingSkillSummary {
-  const skills = listSkills(resolveSkillsRoot(cfg.install, cfg.cwd));
-  if (skills.length === 0) {
-    return {
-      names: [],
-      block: "(no existing skills in this project — MERGE is NOT a valid choice; pick KEEP or SKIP only)",
-    };
-  }
-  let total = 0;
-  const out: string[] = [];
-  const names: string[] = [];
-  for (const s of skills) {
-    const block = `--- existing skill: ${s.name} ---\n${s.body}\n`;
-    if (total + block.length > EXISTING_SKILLS_CHAR_CAP) {
-      out.push(`[…${skills.length - out.length} more existing skills omitted]`);
-      break;
-    }
-    out.push(block);
-    names.push(s.name);
-    total += block.length;
-  }
-  return { names, block: out.join("\n") };
-}
+// renderExistingSkillsBlock is exported from existing-skills.ts so we can
+// unit-test the project+global merging and the [global, read-only] tagging
+// without instantiating the whole worker (which reads its config from argv).
 
 function buildPrompt(pairs: Pair[]): string {
-  const existing = renderExistingSkillsBlock();
-  const mergeTargetsClause = existing.names.length > 0
-    ? `MERGE is allowed only if your "name" is EXACTLY one of: [${existing.names.join(", ")}]. Any other name MUST use KEEP, not MERGE.`
+  const existing = renderExistingSkillsBlock(cfg.cwd, EXISTING_SKILLS_CHAR_CAP);
+  const mergeTargetsClause = existing.mergeTargetNames.length > 0
+    ? `MERGE is allowed only if your "name" is EXACTLY one of: [${existing.mergeTargetNames.join(", ")}]. Any other name MUST use KEEP, not MERGE.`
     : `MERGE is FORBIDDEN — there are no project skills to merge into. Use KEEP or SKIP only.`;
   return [
     `You are a skill curator for the "${cfg.project}" project. You decide whether the recent`,
@@ -279,12 +254,14 @@ function buildPrompt(pairs: Pair[]): string {
     `  merged body that incorporates the new evidence without exceeding ~3000 characters or`,
     `  covering unrelated domains.`,
     `- ${mergeTargetsClause}`,
-    `- Do NOT reference skills outside this project (e.g. ones from ~/.claude/skills/). Only`,
-    `  the project skills listed below count for MERGE.`,
+    `- Skills tagged [global, read-only] are autopulled from the team's shared skills`,
+    `  table. They exist so you can recognise patterns already covered globally and pick`,
+    `  SKIP (or a more specific KEEP) instead of duplicating them. They are NOT valid`,
+    `  MERGE targets — only [project] skills can be merged into.`,
     `- Skill bodies should follow the existing style: short sections (When to use, Workflow,`,
     `  Anti-patterns), concrete commands and file paths drawn from the exchanges, no marketing.`,
     ``,
-    `=== EXISTING PROJECT SKILLS ===`,
+    `=== EXISTING SKILLS ([project] are MERGE-eligible, [global] are reference only) ===`,
     existing.block,
     ``,
     `=== RECENT EXCHANGES (prompt + answer pairs, tool calls already stripped) ===`,
@@ -441,7 +418,7 @@ async function main(): Promise<void> {
      * is a side-channel index. We log and move on.
      */
     async function recordToDeeplake(
-      result: { path: string; version: number },
+      result: { path: string; version: number; createdAt: string; updatedAt: string },
       verdict: Verdict,
     ): Promise<void> {
       try {
@@ -461,8 +438,8 @@ async function main(): Promise<void> {
           trigger: verdict.trigger,
           body: verdict.body!,
           version: result.version,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          createdAt: result.createdAt,
+          updatedAt: result.updatedAt,
         });
         wlog(`recorded to skills table: name=${verdict.name} v${result.version}`);
       } catch (e: any) {

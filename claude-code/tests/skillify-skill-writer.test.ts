@@ -41,6 +41,9 @@ describe("writeNewSkill", () => {
     expect(result.version).toBe(1);
     expect(result.path).toBe(join(skillsRoot, "my-skill", "SKILL.md"));
     expect(existsSync(result.path)).toBe(true);
+    // Caller (the worker → Deeplake INSERT) needs createdAt/updatedAt back.
+    expect(result.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(result.updatedAt).toBe(result.createdAt);
 
     const text = readFileSync(result.path, "utf-8");
     expect(text).toContain("name: my-skill");
@@ -93,6 +96,12 @@ describe("mergeSkill", () => {
 
     expect(result.action).toBe("merged");
     expect(result.version).toBe(2);
+    // Worker passes result.createdAt straight to insertSkillRow — preserving
+    // it across merges is what keeps the v=1 creation date in the skills
+    // table (the previous behavior stamped now() on every INSERT, so every
+    // row had created_at == updated_at).
+    expect(result.createdAt).toBe(v1CreatedAt);
+    expect(result.updatedAt).not.toBe(v1CreatedAt);
 
     const text = readFileSync(v1Path, "utf-8");
     expect(text).toContain("version: 2");
@@ -104,6 +113,7 @@ describe("mergeSkill", () => {
     // updated_at differs
     const updatedAt = text.match(/^updated_at:\s*(.*)$/m)?.[1];
     expect(updatedAt).not.toBe(v1CreatedAt);
+    expect(result.updatedAt).toBe(updatedAt);
 
     // source_sessions: s1 (orig), s2 (dedup), s3 (new) — exactly 3 entries
     const sourceLines = (text.match(/^  - .+$/mg) ?? []);

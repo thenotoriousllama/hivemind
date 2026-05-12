@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   deriveProjectKey,
+  normalizeGitRemoteUrl,
   bumpStopCounter,
   resetCounter,
   readState,
@@ -58,6 +59,56 @@ describe("deriveProjectKey", () => {
   it("derives project name from the basename of cwd", () => {
     const { project } = deriveProjectKey("/tmp/some-project-name");
     expect(project).toBe("some-project-name");
+  });
+});
+
+describe("normalizeGitRemoteUrl", () => {
+  // Two devs cloning the same repo with different URL styles MUST land on
+  // the same projectKey, otherwise the worker treats them as separate
+  // projects and the dedup gate can't reason across cloners.
+  it("collapses all common git URL forms to one canonical string", () => {
+    const variants = [
+      "git@github.com:activeloopai/hivemind.git",
+      "git@github.com:activeloopai/hivemind",
+      "https://github.com/activeloopai/hivemind.git",
+      "https://github.com/activeloopai/hivemind",
+      "https://github.com/activeloopai/hivemind/",
+      "https://emanuele@github.com/activeloopai/hivemind.git",
+      "https://emanuele:secret@github.com/activeloopai/hivemind.git",
+      "ssh://git@github.com/activeloopai/hivemind.git",
+      // Default ports appearing explicitly must collapse too — otherwise
+      // automation/hosting that emits `:443` or `:22` produces divergent
+      // project_keys for the same logical remote.
+      "https://github.com:443/activeloopai/hivemind.git",
+      "ssh://git@github.com:22/activeloopai/hivemind.git",
+      "git://github.com:9418/activeloopai/hivemind.git",
+      "http://github.com:80/activeloopai/hivemind.git",
+    ];
+    const canonical = "github.com/activeloopai/hivemind";
+    for (const v of variants) {
+      expect(normalizeGitRemoteUrl(v)).toBe(canonical);
+    }
+  });
+
+  it("preserves non-default ports (they're load-bearing)", () => {
+    // Internal/self-hosted servers often run on a non-default port; that
+    // port distinguishes the remote and must NOT be stripped.
+    expect(normalizeGitRemoteUrl("https://git.internal.corp:8443/team/repo.git"))
+      .toBe("git.internal.corp:8443/team/repo");
+    expect(normalizeGitRemoteUrl("ssh://git@gitlab.local:2222/team/repo.git"))
+      .toBe("gitlab.local:2222/team/repo");
+  });
+
+  it("preserves case-insensitive equality for mixed-case hosts/paths", () => {
+    expect(normalizeGitRemoteUrl("https://GitHub.com/Org/Repo.git"))
+      .toBe("github.com/org/repo");
+  });
+
+  it("returns input lowercased when not a recognizable git URL (fallback path)", () => {
+    // The fallback in deriveProjectKey hashes the cwd directly; we still
+    // lowercase to avoid case-sensitivity surprises from different
+    // platforms.
+    expect(normalizeGitRemoteUrl("/Users/foo/Some/Path")).toBe("/users/foo/some/path");
   });
 });
 
