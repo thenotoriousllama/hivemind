@@ -12,6 +12,7 @@ import {
   fanOutSymlinks,
   runPull,
   isMissingTableError,
+  isMissingContributorsColumnError,
   assertValidAuthor,
   type QueryFn,
 } from "../../src/skillify/pull.js";
@@ -203,12 +204,57 @@ describe("isMissingTableError", () => {
     expect(isMissingTableError(undefined)).toBe(false);
     expect(isMissingTableError("")).toBe(false);
   });
+
+  it("does NOT false-match a missing-column error (overlaps with 'relation X does not exist')", () => {
+    // The Postgres-shaped message
+    //   column "contributors" of relation "skills" does not exist
+    // contains `relation "skills" does not exist`, which would otherwise
+    // route into the missing-table branch and silently swallow the legacy
+    // table the contributors-column retry was meant to handle.
+    expect(isMissingTableError(`column "contributors" of relation "skills" does not exist`)).toBe(false);
+  });
+});
+
+describe("isMissingContributorsColumnError", () => {
+  it("matches Postgres-shaped 'column \"contributors\" of relation \"skills\" does not exist'", () => {
+    expect(isMissingContributorsColumnError(`column "contributors" of relation "skills" does not exist`)).toBe(true);
+  });
+
+  it("matches loose phrasings that mention contributors and a not-found word", () => {
+    expect(isMissingContributorsColumnError(`unknown column contributors`)).toBe(true);
+    expect(isMissingContributorsColumnError(`contributors not found`)).toBe(true);
+  });
+
+  it("does NOT match errors that don't mention contributors", () => {
+    expect(isMissingContributorsColumnError(`column "foo" does not exist`)).toBe(false);
+    expect(isMissingContributorsColumnError(`syntax error`)).toBe(false);
+    expect(isMissingContributorsColumnError(`Table does not exist`)).toBe(false);
+  });
+
+  it("returns false for empty / undefined", () => {
+    expect(isMissingContributorsColumnError(undefined)).toBe(false);
+    expect(isMissingContributorsColumnError("")).toBe(false);
+  });
 });
 
 describe("buildPullSql ORDER BY composite", () => {
   it("orders by project_key, name, version DESC", () => {
     const sql = buildPullSql({ tableName: "skills", users: [] });
     expect(sql).toContain("ORDER BY project_key ASC, name ASC, version DESC");
+  });
+});
+
+describe("buildPullSql contributors column", () => {
+  it("includes contributors in the SELECT by default (post-#118 schema)", () => {
+    const sql = buildPullSql({ tableName: "skills", users: [] });
+    expect(sql).toContain("contributors,");
+  });
+
+  it("omits contributors when includeContributors=false (legacy table fallback)", () => {
+    const sql = buildPullSql({ tableName: "skills", users: [], includeContributors: false });
+    expect(sql).not.toContain("contributors,");
+    // Author and the rest are still present — only contributors is dropped.
+    expect(sql).toContain("author, description,");
   });
 });
 
@@ -294,6 +340,42 @@ describe("renderSkillFile", () => {
       source_agent: "x", created_at: "t", updated_at: "t", body: "b",
     });
     expect(text).not.toMatch(/^trigger:/m);
+  });
+
+  // Issue #118 — author + contributors persistence
+  it("renders author and contributors when present on the row", () => {
+    const text = renderSkillFile({
+      name: "deploy", description: "d", source_sessions: [], version: 3,
+      source_agent: "claude_code", created_at: "t", updated_at: "t",
+      author: "alice", contributors: '["alice","emanuele"]',
+      body: "b",
+    });
+    expect(text).toContain("author: alice");
+    expect(text).toContain("contributors:\n  - alice\n  - emanuele\n");
+  });
+
+  it("falls back to [author] when contributors is empty (legacy row)", () => {
+    // Legacy rows predating #118 have contributors='[]'. We render
+    // contributors=[author] on disk so local consumers see a consistent
+    // view from the moment the skill lands.
+    const text = renderSkillFile({
+      name: "x", description: "", source_sessions: [], version: 1,
+      source_agent: "x", created_at: "t", updated_at: "t",
+      author: "alice", contributors: "[]",
+      body: "b",
+    });
+    expect(text).toContain("author: alice");
+    expect(text).toContain("contributors:\n  - alice\n");
+  });
+
+  it("omits both fields when author is missing (very old rows)", () => {
+    const text = renderSkillFile({
+      name: "x", description: "", source_sessions: [], version: 1,
+      source_agent: "x", created_at: "t", updated_at: "t",
+      body: "b",
+    });
+    expect(text).not.toMatch(/^author:/m);
+    expect(text).not.toMatch(/^contributors:/m);
   });
 });
 
@@ -451,6 +533,32 @@ describe("runPull", () => {
       query: fn, tableName: "skills", install: "project", cwd: projectRoot,
       users: [], dryRun: false, force: false,
     })).rejects.toThrow(/Authentication failed/);
+  });
+
+  it("falls back to legacy SELECT (no contributors) when the backend reports a missing column", async () => {
+    // Older deployments of the skills table predate the contributors column.
+    // The initial SELECT contributors,... will surface a "column does not
+    // exist" error; runPull must retry once without contributors so the pull
+    // still completes and we don't strand pre-#118 tables. The retried SQL
+    // must NOT mention contributors — otherwise we'd loop forever on the
+    // same error.
+    const calls: string[] = [];
+    const fn: QueryFn = async (sql: string) => {
+      calls.push(sql);
+      if (calls.length === 1) {
+        throw new Error(`column "contributors" of relation "skills" does not exist`);
+      }
+      return [sampleRow()];
+    };
+    const summary = await runPull({
+      query: fn, tableName: "skills", install: "project", cwd: projectRoot,
+      users: [], dryRun: false, force: false,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("contributors,");
+    expect(calls[1]).not.toContain("contributors,");
+    expect(summary.wrote).toBe(1);
+    expect(existsSync(join(projectSkillsRoot, "vox-cli--alice", "SKILL.md"))).toBe(true);
   });
 
   it("keeps cross-author skills with the same name disjoint via --<author> suffix", async () => {
@@ -613,7 +721,7 @@ describe("runPull — symlink fan-out (global install only)", () => {
     body: "## Workflow\n\nDeploy.",
     version: 1,
     source_agent: "claude_code",
-    scope: "org",
+    scope: "team",
     author: "alice",
     description: "Deploy skill",
     trigger_text: "When deploying",

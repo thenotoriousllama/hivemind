@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { insertSkillRow, createSkillsTableSql } from "../../src/skillify/skills-table.js";
+import {
+  insertSkillRow,
+  createSkillsTableSql,
+  addContributorsColumnSql,
+} from "../../src/skillify/skills-table.js";
 
 type Call = { sql: string };
 
@@ -28,6 +32,7 @@ const baseArgs = {
   sourceAgent: "claude_code",
   scope: "me" as const,
   author: "alice",
+  contributors: ["alice"],
   description: "Does X",
   trigger: "When X",
   body: "## Workflow\n\nDo it.",
@@ -96,6 +101,39 @@ describe("insertSkillRow", () => {
     // One call, no CREATE attempt
     expect(calls).toHaveLength(1);
   });
+
+  it("emits the contributors column as JSON-encoded text in the INSERT", async () => {
+    const { calls, query } = spyQuery();
+    await insertSkillRow({ query, ...baseArgs, contributors: ["alice", "emanuele"] });
+    const sql = calls[0].sql;
+    // Column list must mention `contributors`
+    expect(sql).toMatch(/INSERT INTO "skills" \([^)]*contributors[^)]*\)/);
+    // Value is a JSON array (encoded as a SQL string)
+    expect(sql).toContain(`'["alice","emanuele"]'`);
+  });
+
+  it("lazy-adds the contributors column on a missing-column error, then retries INSERT", async () => {
+    // Pre-existing deployment without the column — backend rejects the first
+    // INSERT with a "column does not exist" error. We must ALTER the table
+    // (idempotent) and retry once.
+    const { calls, query } = spyQuery({
+      failFirstWith: `column "contributors" of relation "skills" does not exist`,
+    });
+    await insertSkillRow({ query, ...baseArgs });
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0].sql).toMatch(/^INSERT INTO/);
+    expect(calls[1].sql).toMatch(/^ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS contributors/);
+    expect(calls[2].sql).toMatch(/^INSERT INTO/);
+    // Retry must use the same INSERT (same uuid).
+    expect(calls[0].sql).toBe(calls[2].sql);
+  });
+
+  it("does NOT lazy-ALTER on errors that don't mention the contributors column", async () => {
+    const { calls, query } = spyQuery({ failFirstWith: `permission denied` });
+    await expect(insertSkillRow({ query, ...baseArgs })).rejects.toThrow(/permission denied/);
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe("createSkillsTableSql", () => {
@@ -103,11 +141,31 @@ describe("createSkillsTableSql", () => {
     const sql = createSkillsTableSql("skills");
     for (const col of [
       "id", "name", "project", "project_key", "local_path", "install",
-      "source_sessions", "source_agent", "scope", "author",
+      "source_sessions", "source_agent", "scope", "author", "contributors",
       "description", "trigger_text", "body", "version", "created_at", "updated_at",
     ]) {
       expect(sql).toContain(`${col} `);
     }
     expect(sql).toContain("USING deeplake");
+  });
+
+  it("seeds contributors with an empty JSON array literal", () => {
+    // Legacy rows (predating issue #118) will read this default; client
+    // code falls back to [author] when it sees [] coming back.
+    expect(createSkillsTableSql("skills"))
+      .toContain(`contributors TEXT NOT NULL DEFAULT '[]'`);
+  });
+});
+
+describe("addContributorsColumnSql", () => {
+  it("emits ADD COLUMN IF NOT EXISTS (idempotent on already-migrated tables)", () => {
+    const sql = addContributorsColumnSql("skills");
+    expect(sql).toBe(
+      `ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS contributors TEXT NOT NULL DEFAULT '[]'`,
+    );
+  });
+
+  it("validates the table name to prevent identifier injection", () => {
+    expect(() => addContributorsColumnSql(`x"; DROP TABLE y; --`)).toThrow();
   });
 });

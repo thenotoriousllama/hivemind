@@ -107,6 +107,14 @@ export function buildPullSql(args: {
   tableName: string;
   users: string[];
   skillName?: string;
+  /**
+   * Legacy mode for tables that pre-date the `contributors` column.
+   * The default SELECT includes `contributors`; when a backend errors
+   * with "column does not exist" we retry with this flag set to false,
+   * and renderSkillFile fills in `contributors = [author]` for any row
+   * with a non-empty author.
+   */
+  includeContributors?: boolean;
 }): string {
   const where: string[] = [];
   if (args.users.length > 0) {
@@ -117,13 +125,30 @@ export function buildPullSql(args: {
     where.push(`name = '${esc(args.skillName)}'`);
   }
   const whereClause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
+  const contributorsCol = args.includeContributors === false ? "" : "contributors, ";
   return (
     `SELECT name, project, project_key, body, version, source_agent, scope, ` +
-    `author, description, trigger_text, source_sessions, install, ` +
+    `author, ${contributorsCol}description, trigger_text, source_sessions, install, ` +
     `created_at, updated_at ` +
     `FROM "${args.tableName}"${whereClause} ` +
     `ORDER BY project_key ASC, name ASC, version DESC`
   );
+}
+
+/**
+ * Recognises errors emitted when a table is missing the `contributors`
+ * column — typically a deployment that predates issue #118 and that hasn't
+ * had a lazy-migrating INSERT yet. `runPull` catches this and retries
+ * the SELECT in legacy mode so an outdated table degrades gracefully
+ * instead of aborting the pull entirely.
+ *
+ * Kept narrow on purpose (must mention the column by name) so generic
+ * 400s don't accidentally route into the legacy retry.
+ */
+export function isMissingContributorsColumnError(message: string | undefined): boolean {
+  if (!message) return false;
+  return /contributors.*(?:does not exist|not found|unknown)/i.test(message)
+    || /(?:does not exist|unknown column).*contributors/i.test(message);
 }
 
 /**
@@ -134,6 +159,12 @@ export function buildPullSql(args: {
  */
 export function isMissingTableError(message: string | undefined): boolean {
   if (!message) return false;
+  // Missing-column errors typically read
+  //   `column "contributors" of relation "skills" does not exist`
+  // which would otherwise match the `relation .* does not exist` arm
+  // below and get silently swallowed as an empty result set — masking
+  // the legacy-table case that needs the contributors-column retry.
+  if (/\bcolumn\b/i.test(message)) return false;
   // Deeplake / Postgres-flavoured errors:
   //   "Table does not exist: relation \"skills\" does not exist"
   //   "relation \"skills\" does not exist"
@@ -297,11 +328,28 @@ export function selectLatestPerName(rows: Record<string, unknown>[]): Record<str
  */
 export function renderSkillFile(row: Record<string, unknown>): string {
   const sources = parseSourceSessions(row.source_sessions);
+  // Author + contributors land on disk so the gate sees the same lineage
+  // info it would for a locally-mined skill. Without this, the worker on
+  // the puller's side can't tell that a `[global]` skill is authored by
+  // someone else, and the cross-author MERGE auto-promote (issue #118)
+  // silently degrades to "treat as same-author" — re-introducing the
+  // ambiguous-lineage bug we built #118 to fix.
+  const author = typeof row.author === "string" && row.author.length > 0
+    ? row.author
+    : undefined;
+  const contributors = parseContributors(row.contributors);
+  // Legacy rows have contributors=[]; render them as [author] on disk so
+  // local consumers (gate, mergeSkill) see a consistent view.
+  const renderedContributors = contributors.length > 0
+    ? contributors
+    : (author ? [author] : []);
   const fm: SkillFrontmatter = {
     name: String(row.name ?? ""),
     description: String(row.description ?? ""),
     trigger: typeof row.trigger_text === "string" && row.trigger_text.length > 0 ? String(row.trigger_text) : undefined,
+    author,
     source_sessions: sources,
+    contributors: renderedContributors,
     version: Number(row.version ?? 1),
     created_by_agent: String(row.source_agent ?? "unknown"),
     created_at: String(row.created_at ?? new Date().toISOString()),
@@ -322,13 +370,30 @@ function parseSourceSessions(v: unknown): string[] {
   return [];
 }
 
+/** Same shape as parseSourceSessions but for the `contributors` column. */
+function parseContributors(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch { /* not JSON, fall through */ }
+  }
+  return [];
+}
+
 function renderFrontmatter(fm: SkillFrontmatter): string {
   const lines: string[] = ["---"];
   lines.push(`name: ${fm.name}`);
   lines.push(`description: ${JSON.stringify(fm.description)}`);
   if (fm.trigger) lines.push(`trigger: ${JSON.stringify(fm.trigger)}`);
+  if (fm.author) lines.push(`author: ${fm.author}`);
   lines.push(`source_sessions:`);
   for (const s of fm.source_sessions) lines.push(`  - ${s}`);
+  if (fm.contributors && fm.contributors.length > 0) {
+    lines.push(`contributors:`);
+    for (const c of fm.contributors) lines.push(`  - ${c}`);
+  }
   lines.push(`version: ${fm.version}`);
   lines.push(`created_by_agent: ${fm.created_by_agent}`);
   lines.push(`created_at: ${fm.created_at}`);
@@ -394,12 +459,26 @@ export async function runPull(opts: PullOptions): Promise<PullSummary> {
   });
   // Treat "table does not exist" as an empty result set — the table is
   // created lazily on first INSERT, so a fresh workspace has no skills yet.
+  // On a missing-contributors error (legacy table that pre-dates #118 and
+  // hasn't been lazy-migrated by an INSERT yet) retry once with the
+  // legacy SELECT shape so the pull keeps working until the next write.
   let rows: Record<string, unknown>[] = [];
   try {
     rows = await opts.query(sql);
   } catch (e: any) {
-    if (isMissingTableError(e?.message)) rows = [];
-    else throw e;
+    if (isMissingTableError(e?.message)) {
+      rows = [];
+    } else if (isMissingContributorsColumnError(e?.message)) {
+      const legacySql = buildPullSql({
+        tableName: opts.tableName,
+        users: opts.users,
+        skillName: opts.skillName,
+        includeContributors: false,
+      });
+      rows = await opts.query(legacySql);
+    } else {
+      throw e;
+    }
   }
   const latest = selectLatestPerName(rows);
 

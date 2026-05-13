@@ -115,9 +115,12 @@ describe("migrateLegacyStateDir", () => {
     expect(existsSync(current)).toBe(true);
     expect(existsSync(legacy)).toBe(false);
 
-    // Recreate legacy with conflicting content; second call must NOT touch it.
+    // Recreate legacy with conflicting content; second call must NOT touch
+    // it. The `me-sentinel` value is just a string distinct from the
+    // earlier `"team"`; we use it to verify the file's content is exactly
+    // what we wrote and nothing migrated over it.
     mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, "config.json"), '{"scope":"org"}');
+    writeFileSync(join(legacy, "config.json"), '{"scope":"me-sentinel"}');
     rmSync(current, { recursive: true, force: true });
 
     migrate();
@@ -126,7 +129,7 @@ describe("migrateLegacyStateDir", () => {
     // the new legacy. Confirms the `attempted` short-circuit holds.
     expect(existsSync(current)).toBe(false);
     expect(existsSync(legacy)).toBe(true);
-    expect(readFileSync(join(legacy, "config.json"), "utf-8")).toBe('{"scope":"org"}');
+    expect(readFileSync(join(legacy, "config.json"), "utf-8")).toBe('{"scope":"me-sentinel"}');
   });
 
   it.each([

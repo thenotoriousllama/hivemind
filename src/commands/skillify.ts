@@ -5,7 +5,7 @@
  *
  * Usage:
  *   hivemind skillify                              — show current scope, team, status
- *   hivemind skillify scope <me|team|org>          — set the mining scope
+ *   hivemind skillify scope <me|team>              — set the mining scope
  *   hivemind skillify install <project|global>     — set where new skills are written
  *   hivemind skillify promote <skill-name>         — move a project skill to global
  *   hivemind skillify team add <username>          — add a username to the team list
@@ -15,8 +15,10 @@
  *   hivemind skillify status                       — show counter + per-project state
  *
  * The team list is consumed by the worker when scope=team: SQL filter
- * becomes `author IN (<team>)`. scope=me filters by current user only;
- * scope=org applies no author filter.
+ * becomes `author IN (<team>)`. scope=me filters by current user only.
+ * A legacy scope=org value (no author filter) was retired; the parser
+ * silently coerces it to "team" when read from an old config.json so
+ * users who set it once don't get a hard failure on next session.
  */
 
 import { readdirSync, existsSync, readFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
@@ -90,8 +92,8 @@ function showStatus(): void {
 }
 
 function setScope(scope: string): void {
-  if (scope !== "me" && scope !== "team" && scope !== "org") {
-    console.error(`Invalid scope '${scope}'. Use one of: me, team, org`);
+  if (scope !== "me" && scope !== "team") {
+    console.error(`Invalid scope '${scope}'. Use one of: me, team`);
     process.exit(1);
   }
   const cfg = loadScopeConfig();
@@ -166,7 +168,7 @@ function teamList(): void {
 function usage(): void {
   console.log("Usage:");
   console.log("  hivemind skillify                            show current scope, team, install, and per-project state");
-  console.log("  hivemind skillify scope <me|team|org>        set the mining scope");
+  console.log("  hivemind skillify scope <me|team>            set the mining scope");
   console.log("  hivemind skillify install <project|global>   set where new skills are written");
   console.log("  hivemind skillify promote <skill-name>       move a project skill to the global location");
   console.log("  hivemind skillify team add <username>        add a username to the team list");

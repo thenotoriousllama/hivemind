@@ -137,6 +137,101 @@ describe("mergeSkill", () => {
   });
 });
 
+describe("author + contributors (issue #118)", () => {
+  it("writeNewSkill with author stamps frontmatter and seeds contributors=[author]", () => {
+    const result = writeNewSkill({
+      skillsRoot, name: "c1", description: "d", body: VALID_BODY,
+      sourceSessions: [], agent: "x", author: "alice",
+    });
+    expect(result.author).toBe("alice");
+    expect(result.contributors).toEqual(["alice"]);
+    const text = readFileSync(result.path, "utf-8");
+    expect(text).toContain("author: alice");
+    // Contributors block is rendered with one entry — alice as the seed.
+    expect(text).toMatch(/contributors:\n  - alice\n/);
+  });
+
+  it("writeNewSkill without author omits both fields (legacy/back-compat)", () => {
+    const result = writeNewSkill({
+      skillsRoot, name: "c2", description: "d", body: VALID_BODY,
+      sourceSessions: [], agent: "x",
+    });
+    expect(result.author).toBeUndefined();
+    expect(result.contributors).toEqual([]);
+    const text = readFileSync(result.path, "utf-8");
+    expect(text).not.toContain("author:");
+    expect(text).not.toContain("contributors:");
+  });
+
+  it("mergeSkill with same author as v=1 does not duplicate the entry", () => {
+    writeNewSkill({
+      skillsRoot, name: "c3", description: "d", body: VALID_BODY,
+      sourceSessions: [], agent: "x", author: "alice",
+    });
+    const result = mergeSkill({
+      skillsRoot, name: "c3", body: "v2 body", newSourceSessions: [],
+      agent: "x", editor: "alice",
+    });
+    // Same editor as author — list stays length-1.
+    expect(result.contributors).toEqual(["alice"]);
+    expect(result.author).toBe("alice");
+    const text = readFileSync(result.path, "utf-8");
+    // Exactly one entry under `contributors:`.
+    expect(text.match(/contributors:\n((?:  - .+\n)+)/)?.[1].trim()).toBe("- alice");
+  });
+
+  it("mergeSkill by a different editor appends them — cross-author lineage recorded", () => {
+    writeNewSkill({
+      skillsRoot, name: "c4", description: "d", body: VALID_BODY,
+      sourceSessions: [], agent: "x", author: "alice",
+    });
+    const result = mergeSkill({
+      skillsRoot, name: "c4", body: "v2 body", newSourceSessions: [],
+      agent: "x", editor: "emanuele",
+    });
+    expect(result.author).toBe("alice");
+    // Order matters — author first, editor appended in arrival order.
+    expect(result.contributors).toEqual(["alice", "emanuele"]);
+    const text = readFileSync(result.path, "utf-8");
+    expect(text).toContain("contributors:\n  - alice\n  - emanuele\n");
+  });
+
+  it("subsequent merge by the same editor does NOT duplicate them", () => {
+    writeNewSkill({
+      skillsRoot, name: "c5", description: "d", body: VALID_BODY,
+      sourceSessions: [], agent: "x", author: "alice",
+    });
+    mergeSkill({
+      skillsRoot, name: "c5", body: "v2", newSourceSessions: [],
+      agent: "x", editor: "emanuele",
+    });
+    const result = mergeSkill({
+      skillsRoot, name: "c5", body: "v3", newSourceSessions: [],
+      agent: "x", editor: "emanuele",
+    });
+    expect(result.contributors).toEqual(["alice", "emanuele"]);
+  });
+
+  it("merging a legacy file (no author/contributors in frontmatter) does not invent an author", () => {
+    // Write a SKILL.md by hand with the legacy frontmatter shape — no
+    // author / contributors keys at all. mergeSkill must not retroactively
+    // claim the editor wrote v=1.
+    const legacy =
+      `---\nname: legacy\ndescription: "old"\nsource_sessions:\n  - s1\nversion: 1\ncreated_by_agent: cc\ncreated_at: 2026\nupdated_at: 2026\n---\n\nold body`;
+    const dir = join(skillsRoot, "legacy");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), legacy);
+    const result = mergeSkill({
+      skillsRoot, name: "legacy", body: "new body", newSourceSessions: [],
+      agent: "x", editor: "emanuele",
+    });
+    // Author stays undefined (legacy row had none), but contributors
+    // gets the editor — the new lineage starts here.
+    expect(result.author).toBeUndefined();
+    expect(result.contributors).toEqual(["emanuele"]);
+  });
+});
+
 describe("parseFrontmatter", () => {
   it("parses standard frontmatter", () => {
     const text =

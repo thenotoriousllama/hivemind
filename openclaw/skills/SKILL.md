@@ -62,7 +62,7 @@ Hivemind also mines reusable Claude skills from agent sessions and stores them i
 - `hivemind skillify unpull --user <email>` — remove only that author's pulls
 - `hivemind skillify unpull --not-mine` — remove all pulls except your own
 - `hivemind skillify unpull --dry-run` — preview without touching disk
-- `hivemind skillify scope <me|team|org>` — set sharing scope for new skills
+- `hivemind skillify scope <me|team>` — set sharing scope for new skills
 - `hivemind skillify install <project|global>` — default install location
 - `hivemind skillify team add|remove|list <name>` — manage team list
 

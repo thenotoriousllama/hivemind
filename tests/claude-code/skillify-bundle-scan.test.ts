@@ -31,11 +31,13 @@ describe("skillify-worker bundle is shipped per agent", () => {
       const text = readFileSync(path, "utf-8");
       // Sanity: bundle should have the skillify log channel and the gate prompt.
       expect(text).toContain("skillify-worker(");
-      // Gate-prompt heading: was "EXISTING PROJECT SKILLS" before the
-      // project + global merge; new heading mentions both tags so the
-      // bundle scan stays sensitive to the gate prompt actually shipping.
+      // Gate-prompt heading: was "EXISTING PROJECT SKILLS" pre-#119;
+      // became "EXISTING SKILLS" after the project + global merge; #118
+      // appended the contributors auto-promote clause so we check that
+      // the prompt explicitly mentions cross-author MERGE + scope=team.
       expect(text).toContain("EXISTING SKILLS");
-      expect(text).toContain("[project] are MERGE-eligible");
+      expect(text).toContain("scope=team");
+      expect(text).toContain("Cross-author MERGE");
       // Watermark advance is the SKIP hot path.
       expect(text).toContain("advancing watermark");
     });

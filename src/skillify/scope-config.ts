@@ -2,11 +2,17 @@
  * Persisted scope + team membership for the skillify worker.
  *
  * File: ~/.deeplake/state/skillify/config.json
- *   { scope: "me" | "team" | "org", team: string[] }
+ *   { scope: "me" | "team", team: string[] }
  *
  * Defaults to scope "me" with an empty team list when the file is absent
  * or unreadable. The `hivemind skillify` CLI (src/commands/skillify.ts) is
  * the only writer; the worker hook reads.
+ *
+ * Legacy compat: the product surface used to include a third value
+ * `scope = "org"` (no author filter, mine from every workspace user).
+ * The CLI no longer accepts it, but config files that already set it
+ * are silently coerced to `"team"` on read so users who ran `hivemind
+ * skillify scope org` once don't get a hard failure on next session.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,7 +20,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { migrateLegacyStateDir } from "./legacy-migration.js";
 
-export type Scope = "me" | "team" | "org";
+export type Scope = "me" | "team";
 export type InstallLocation = "project" | "global";
 
 export interface ScopeConfig {
@@ -38,7 +44,14 @@ export function loadScopeConfig(): ScopeConfig {
   if (!existsSync(CONFIG_PATH)) return DEFAULT;
   try {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-    const scope: Scope = raw.scope === "team" || raw.scope === "org" ? raw.scope : "me";
+    // Silent legacy coercion: `"org"` was a third scope value we removed
+    // when narrowing the product surface to me|team. Treating a stale
+    // `"org"` config as `"team"` keeps existing users working without
+    // forcing them to re-run `hivemind skillify scope`.
+    const scope: Scope =
+      raw.scope === "team" ? "team"
+        : raw.scope === "org" ? "team"
+          : "me";
     const team: string[] = Array.isArray(raw.team)
       ? raw.team.filter((s: unknown): s is string => typeof s === "string")
       : [];

@@ -5,11 +5,21 @@
  *   name: <skill-name>
  *   description: <one-line>
  *   trigger: <one-line>
+ *   author: <original creator's username>
  *   source_sessions: [<uuid>, ...]
+ *   contributors: [<username>, ...]      # ordered chronologically by edit
  *   version: <int, bumps on merge>
  *   created_by_agent: <agent-name>
  *   created_at: <iso>
  *   updated_at: <iso>
+ *
+ * Contributors model (issue #118): the `author` field is the original
+ * creator's username (v=1) and never changes across merges. `contributors`
+ * starts as `[author]` and gets the current editor appended on every
+ * cross-author MERGE (the worker decides whether to append). Same-author
+ * MERGEs do not duplicate the entry. Legacy files without these fields
+ * read back as `author=undefined`, `contributors=[]`; callers fall back
+ * to the `author` arg they were given when that happens.
  *
  * The body returned by the gate is written verbatim. We do not parse or
  * reformat it — the gate is responsible for shape.
@@ -23,7 +33,11 @@ export interface SkillFrontmatter {
   name: string;
   description: string;
   trigger?: string;
+  /** Original creator's username — set on v=1, immutable across merges. */
+  author?: string;
   source_sessions: string[];
+  /** Editors in order of first contribution. Includes `author` as the first entry. */
+  contributors?: string[];
   version: number;
   created_by_agent: string;
   created_at: string;
@@ -38,6 +52,12 @@ export interface WriteSkillArgs {
   body: string;
   sourceSessions: string[];
   agent: string;
+  /**
+   * Author of this fresh skill (cfg.userName in the worker). Stored as the
+   * frontmatter `author` and seeds `contributors=[author]`. Empty string
+   * is allowed for legacy callers / tests; we just omit the fields then.
+   */
+  author?: string;
 }
 
 export interface MergeSkillArgs {
@@ -47,6 +67,13 @@ export interface MergeSkillArgs {
   body: string;            // merged body returned by gate
   newSourceSessions: string[];
   agent: string;
+  /**
+   * Username of whoever is performing this MERGE (cfg.userName in the
+   * worker). Appended to `contributors` if not already present. Omit only
+   * in legacy tests; production callers always pass it so the
+   * cross-author lineage is recorded.
+   */
+  editor?: string;
 }
 
 export interface SkillWriteResult {
@@ -57,6 +84,10 @@ export interface SkillWriteResult {
   createdAt: string;
   /** ISO timestamp of this write. */
   updatedAt: string;
+  /** Original creator (frontmatter `author`). Undefined for legacy v=1 rows. */
+  author?: string;
+  /** Full contributor list after this write — caller uses it for the DB INSERT. */
+  contributors: string[];
 }
 
 /**
@@ -98,8 +129,15 @@ function renderFrontmatter(fm: SkillFrontmatter): string {
   lines.push(`name: ${fm.name}`);
   lines.push(`description: ${JSON.stringify(fm.description)}`);
   if (fm.trigger) lines.push(`trigger: ${JSON.stringify(fm.trigger)}`);
+  if (fm.author) lines.push(`author: ${fm.author}`);
   lines.push(`source_sessions:`);
   for (const s of fm.source_sessions) lines.push(`  - ${s}`);
+  // Render contributors only when non-empty so legacy files don't grow an
+  // empty `contributors:` block on a roundtrip.
+  if (fm.contributors && fm.contributors.length > 0) {
+    lines.push(`contributors:`);
+    for (const c of fm.contributors) lines.push(`  - ${c}`);
+  }
   lines.push(`version: ${fm.version}`);
   lines.push(`created_by_agent: ${fm.created_by_agent}`);
   lines.push(`created_at: ${fm.created_at}`);
@@ -120,17 +158,23 @@ export function parseFrontmatter(text: string): { fm: Partial<SkillFrontmatter>;
   const head = text.slice(4, end).trim();
   const body = text.slice(end + 4).replace(/^\r?\n/, "");
   const fm: Partial<SkillFrontmatter> = { source_sessions: [] };
-  let mode: "kv" | "sources" = "kv";
+  // arrayKey carries the current array field we're consuming. Generalizes
+  // the old "sources" mode so we can also parse `contributors:` without
+  // duplicating the bullet-list parsing.
+  let arrayKey: "source_sessions" | "contributors" | null = null;
   for (const raw of head.split(/\r?\n/)) {
-    if (mode === "sources") {
+    if (arrayKey) {
       const m = raw.match(/^\s+-\s+(.+)$/);
-      if (m) { fm.source_sessions!.push(m[1].trim()); continue; }
-      mode = "kv";
+      if (m) {
+        const arr = (fm as any)[arrayKey] as string[] | undefined ?? [];
+        arr.push(m[1].trim());
+        (fm as any)[arrayKey] = arr;
+        continue;
+      }
+      arrayKey = null;
     }
-    if (raw.startsWith("source_sessions:")) {
-      mode = "sources";
-      continue;
-    }
+    if (raw.startsWith("source_sessions:")) { arrayKey = "source_sessions"; continue; }
+    if (raw.startsWith("contributors:")) { arrayKey = "contributors"; fm.contributors = []; continue; }
     const m = raw.match(/^([a-zA-Z_]+):\s*(.*)$/);
     if (!m) continue;
     const [, k, v] = m;
@@ -156,11 +200,17 @@ export function writeNewSkill(args: WriteSkillArgs): SkillWriteResult {
   }
   mkdirSync(dir, { recursive: true });
   const now = new Date().toISOString();
+  // Seed contributors with the author if one was provided. Empty / missing
+  // author keeps both fields absent so legacy callers see no schema churn.
+  const author = args.author && args.author.length > 0 ? args.author : undefined;
+  const contributors = author ? [author] : [];
   const fm: SkillFrontmatter = {
     name: args.name,
     description: args.description,
     trigger: args.trigger,
+    author,
     source_sessions: args.sourceSessions,
+    contributors,
     version: 1,
     created_by_agent: args.agent,
     created_at: now,
@@ -168,7 +218,11 @@ export function writeNewSkill(args: WriteSkillArgs): SkillWriteResult {
   };
   const text = `${renderFrontmatter(fm)}\n\n${args.body.trim()}\n`;
   writeFileSync(path, text);
-  return { path, action: "created", version: 1, createdAt: now, updatedAt: now };
+  return {
+    path, action: "created", version: 1,
+    createdAt: now, updatedAt: now,
+    author, contributors,
+  };
 }
 
 /**
@@ -186,12 +240,28 @@ export function mergeSkill(args: MergeSkillArgs): SkillWriteResult {
   const prevVersion = (parsed?.fm.version as number) ?? 1;
   const prevSources = parsed?.fm.source_sessions ?? [];
   const merged = Array.from(new Set([...prevSources, ...args.newSourceSessions]));
+  // Author is immutable across merges. If the v=1 row didn't carry one
+  // (legacy), preserve absence — better than retroactively claiming the
+  // editor wrote v=1.
+  const author = (parsed?.fm.author as string | undefined);
+  // Contributors: take what's already there (or treat legacy [] as [author]
+  // if we have an author), then append the editor if not already in it.
+  const prevContribs =
+    parsed?.fm.contributors && parsed.fm.contributors.length > 0
+      ? parsed.fm.contributors
+      : (author ? [author] : []);
+  const contributors = [...prevContribs];
+  if (args.editor && args.editor.length > 0 && !contributors.includes(args.editor)) {
+    contributors.push(args.editor);
+  }
   const now = new Date().toISOString();
   const fm: SkillFrontmatter = {
     name: args.name,
     description: args.description ?? (parsed?.fm.description as string) ?? "",
     trigger: parsed?.fm.trigger as string | undefined,
+    author,
     source_sessions: merged,
+    contributors,
     version: prevVersion + 1,
     created_by_agent: (parsed?.fm.created_by_agent as string) ?? args.agent,
     created_at: (parsed?.fm.created_at as string) ?? now,
@@ -199,7 +269,11 @@ export function mergeSkill(args: MergeSkillArgs): SkillWriteResult {
   };
   const text = `${renderFrontmatter(fm)}\n\n${args.body.trim()}\n`;
   writeFileSync(path, text);
-  return { path, action: "merged", version: fm.version, createdAt: fm.created_at, updatedAt: fm.updated_at };
+  return {
+    path, action: "merged", version: fm.version,
+    createdAt: fm.created_at, updatedAt: fm.updated_at,
+    author, contributors,
+  };
 }
 
 /**

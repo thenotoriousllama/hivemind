@@ -486,13 +486,14 @@ var DeeplakeApi = class {
     const tables = await this.listTables();
     if (!tables.includes(tbl)) {
       log2(`table "${tbl}" not found, creating`);
-      await this.createTableWithRetry(`CREATE TABLE IF NOT EXISTS "${tbl}" (id TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', summary_embedding FLOAT4[], author TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT 'text/plain', size_bytes BIGINT NOT NULL DEFAULT 0, project TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', creation_date TEXT NOT NULL DEFAULT '', last_update_date TEXT NOT NULL DEFAULT '') USING deeplake`, tbl);
+      await this.createTableWithRetry(`CREATE TABLE IF NOT EXISTS "${tbl}" (id TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', summary_embedding FLOAT4[], author TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT 'text/plain', size_bytes BIGINT NOT NULL DEFAULT 0, project TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', plugin_version TEXT NOT NULL DEFAULT '', creation_date TEXT NOT NULL DEFAULT '', last_update_date TEXT NOT NULL DEFAULT '') USING deeplake`, tbl);
       log2(`table "${tbl}" created`);
       if (!tables.includes(tbl))
         this._tablesCache = [...tables, tbl];
     }
     await this.ensureEmbeddingColumn(tbl, SUMMARY_EMBEDDING_COL);
     await this.ensureColumn(tbl, "agent", "TEXT NOT NULL DEFAULT ''");
+    await this.ensureColumn(tbl, "plugin_version", "TEXT NOT NULL DEFAULT ''");
   }
   /** Create the sessions table (uses JSONB for message since every row is a JSON event). */
   async ensureSessionsTable(name) {
@@ -500,13 +501,14 @@ var DeeplakeApi = class {
     const tables = await this.listTables();
     if (!tables.includes(safe)) {
       log2(`table "${safe}" not found, creating`);
-      await this.createTableWithRetry(`CREATE TABLE IF NOT EXISTS "${safe}" (id TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL DEFAULT '', message JSONB, message_embedding FLOAT4[], author TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT 'application/json', size_bytes BIGINT NOT NULL DEFAULT 0, project TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', creation_date TEXT NOT NULL DEFAULT '', last_update_date TEXT NOT NULL DEFAULT '') USING deeplake`, safe);
+      await this.createTableWithRetry(`CREATE TABLE IF NOT EXISTS "${safe}" (id TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL DEFAULT '', message JSONB, message_embedding FLOAT4[], author TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT 'application/json', size_bytes BIGINT NOT NULL DEFAULT 0, project TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', plugin_version TEXT NOT NULL DEFAULT '', creation_date TEXT NOT NULL DEFAULT '', last_update_date TEXT NOT NULL DEFAULT '') USING deeplake`, safe);
       log2(`table "${safe}" created`);
       if (!tables.includes(safe))
         this._tablesCache = [...tables, safe];
     }
     await this.ensureEmbeddingColumn(safe, MESSAGE_EMBEDDING_COL);
     await this.ensureColumn(safe, "agent", "TEXT NOT NULL DEFAULT ''");
+    await this.ensureColumn(safe, "plugin_version", "TEXT NOT NULL DEFAULT ''");
     await this.ensureLookupIndex(safe, "path_creation_date", `("path", "creation_date")`);
   }
   /**
@@ -565,18 +567,25 @@ function parseFrontmatter(text) {
   const head = text.slice(4, end).trim();
   const body = text.slice(end + 4).replace(/^\r?\n/, "");
   const fm = { source_sessions: [] };
-  let mode = "kv";
+  let arrayKey = null;
   for (const raw of head.split(/\r?\n/)) {
-    if (mode === "sources") {
+    if (arrayKey) {
       const m2 = raw.match(/^\s+-\s+(.+)$/);
       if (m2) {
-        fm.source_sessions.push(m2[1].trim());
+        const arr = fm[arrayKey] ?? [];
+        arr.push(m2[1].trim());
+        fm[arrayKey] = arr;
         continue;
       }
-      mode = "kv";
+      arrayKey = null;
     }
     if (raw.startsWith("source_sessions:")) {
-      mode = "sources";
+      arrayKey = "source_sessions";
+      continue;
+    }
+    if (raw.startsWith("contributors:")) {
+      arrayKey = "contributors";
+      fm.contributors = [];
       continue;
     }
     const m = raw.match(/^([a-zA-Z_]+):\s*(.*)$/);
@@ -791,10 +800,18 @@ function buildPullSql(args) {
     where.push(`name = '${esc(args.skillName)}'`);
   }
   const whereClause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
-  return `SELECT name, project, project_key, body, version, source_agent, scope, author, description, trigger_text, source_sessions, install, created_at, updated_at FROM "${args.tableName}"${whereClause} ORDER BY project_key ASC, name ASC, version DESC`;
+  const contributorsCol = args.includeContributors === false ? "" : "contributors, ";
+  return `SELECT name, project, project_key, body, version, source_agent, scope, author, ${contributorsCol}description, trigger_text, source_sessions, install, created_at, updated_at FROM "${args.tableName}"${whereClause} ORDER BY project_key ASC, name ASC, version DESC`;
+}
+function isMissingContributorsColumnError(message) {
+  if (!message)
+    return false;
+  return /contributors.*(?:does not exist|not found|unknown)/i.test(message) || /(?:does not exist|unknown column).*contributors/i.test(message);
 }
 function isMissingTableError(message) {
   if (!message)
+    return false;
+  if (/\bcolumn\b/i.test(message))
     return false;
   return /Table does not exist|relation .* does not exist|no such table/i.test(message);
 }
@@ -891,11 +908,16 @@ function selectLatestPerName(rows) {
 }
 function renderSkillFile(row) {
   const sources = parseSourceSessions(row.source_sessions);
+  const author = typeof row.author === "string" && row.author.length > 0 ? row.author : void 0;
+  const contributors = parseContributors(row.contributors);
+  const renderedContributors = contributors.length > 0 ? contributors : author ? [author] : [];
   const fm = {
     name: String(row.name ?? ""),
     description: String(row.description ?? ""),
     trigger: typeof row.trigger_text === "string" && row.trigger_text.length > 0 ? String(row.trigger_text) : void 0,
+    author,
     source_sessions: sources,
+    contributors: renderedContributors,
     version: Number(row.version ?? 1),
     created_by_agent: String(row.source_agent ?? "unknown"),
     created_at: String(row.created_at ?? (/* @__PURE__ */ new Date()).toISOString()),
@@ -920,15 +942,35 @@ function parseSourceSessions(v) {
   }
   return [];
 }
+function parseContributors(v) {
+  if (Array.isArray(v))
+    return v.map(String);
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed))
+        return parsed.map(String);
+    } catch {
+    }
+  }
+  return [];
+}
 function renderFrontmatter(fm) {
   const lines = ["---"];
   lines.push(`name: ${fm.name}`);
   lines.push(`description: ${JSON.stringify(fm.description)}`);
   if (fm.trigger)
     lines.push(`trigger: ${JSON.stringify(fm.trigger)}`);
+  if (fm.author)
+    lines.push(`author: ${fm.author}`);
   lines.push(`source_sessions:`);
   for (const s of fm.source_sessions)
     lines.push(`  - ${s}`);
+  if (fm.contributors && fm.contributors.length > 0) {
+    lines.push(`contributors:`);
+    for (const c of fm.contributors)
+      lines.push(`  - ${c}`);
+  }
   lines.push(`version: ${fm.version}`);
   lines.push(`created_by_agent: ${fm.created_by_agent}`);
   lines.push(`created_at: ${fm.created_at}`);
@@ -968,10 +1010,19 @@ async function runPull(opts) {
   try {
     rows = await opts.query(sql);
   } catch (e) {
-    if (isMissingTableError(e?.message))
+    if (isMissingTableError(e?.message)) {
       rows = [];
-    else
+    } else if (isMissingContributorsColumnError(e?.message)) {
+      const legacySql = buildPullSql({
+        tableName: opts.tableName,
+        users: opts.users,
+        skillName: opts.skillName,
+        includeContributors: false
+      });
+      rows = await opts.query(legacySql);
+    } else {
       throw e;
+    }
   }
   const latest = selectLatestPerName(rows);
   const root = resolvePullDestination(opts.install, opts.cwd);

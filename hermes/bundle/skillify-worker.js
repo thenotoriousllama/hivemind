@@ -90,9 +90,16 @@ function renderFrontmatter(fm) {
   lines.push(`description: ${JSON.stringify(fm.description)}`);
   if (fm.trigger)
     lines.push(`trigger: ${JSON.stringify(fm.trigger)}`);
+  if (fm.author)
+    lines.push(`author: ${fm.author}`);
   lines.push(`source_sessions:`);
   for (const s of fm.source_sessions)
     lines.push(`  - ${s}`);
+  if (fm.contributors && fm.contributors.length > 0) {
+    lines.push(`contributors:`);
+    for (const c of fm.contributors)
+      lines.push(`  - ${c}`);
+  }
   lines.push(`version: ${fm.version}`);
   lines.push(`created_by_agent: ${fm.created_by_agent}`);
   lines.push(`created_at: ${fm.created_at}`);
@@ -109,18 +116,25 @@ function parseFrontmatter(text) {
   const head = text.slice(4, end).trim();
   const body = text.slice(end + 4).replace(/^\r?\n/, "");
   const fm = { source_sessions: [] };
-  let mode = "kv";
+  let arrayKey = null;
   for (const raw of head.split(/\r?\n/)) {
-    if (mode === "sources") {
+    if (arrayKey) {
       const m2 = raw.match(/^\s+-\s+(.+)$/);
       if (m2) {
-        fm.source_sessions.push(m2[1].trim());
+        const arr = fm[arrayKey] ?? [];
+        arr.push(m2[1].trim());
+        fm[arrayKey] = arr;
         continue;
       }
-      mode = "kv";
+      arrayKey = null;
     }
     if (raw.startsWith("source_sessions:")) {
-      mode = "sources";
+      arrayKey = "source_sessions";
+      continue;
+    }
+    if (raw.startsWith("contributors:")) {
+      arrayKey = "contributors";
+      fm.contributors = [];
       continue;
     }
     const m = raw.match(/^([a-zA-Z_]+):\s*(.*)$/);
@@ -151,11 +165,15 @@ function writeNewSkill(args) {
   }
   mkdirSync(dir, { recursive: true });
   const now = (/* @__PURE__ */ new Date()).toISOString();
+  const author = args.author && args.author.length > 0 ? args.author : void 0;
+  const contributors = author ? [author] : [];
   const fm = {
     name: args.name,
     description: args.description,
     trigger: args.trigger,
+    author,
     source_sessions: args.sourceSessions,
+    contributors,
     version: 1,
     created_by_agent: args.agent,
     created_at: now,
@@ -166,7 +184,15 @@ function writeNewSkill(args) {
 ${args.body.trim()}
 `;
   writeFileSync(path, text);
-  return { path, action: "created", version: 1, createdAt: now, updatedAt: now };
+  return {
+    path,
+    action: "created",
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    author,
+    contributors
+  };
 }
 function mergeSkill(args) {
   assertValidSkillName(args.name);
@@ -179,12 +205,20 @@ function mergeSkill(args) {
   const prevVersion = parsed?.fm.version ?? 1;
   const prevSources = parsed?.fm.source_sessions ?? [];
   const merged = Array.from(/* @__PURE__ */ new Set([...prevSources, ...args.newSourceSessions]));
+  const author = parsed?.fm.author;
+  const prevContribs = parsed?.fm.contributors && parsed.fm.contributors.length > 0 ? parsed.fm.contributors : author ? [author] : [];
+  const contributors = [...prevContribs];
+  if (args.editor && args.editor.length > 0 && !contributors.includes(args.editor)) {
+    contributors.push(args.editor);
+  }
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const fm = {
     name: args.name,
     description: args.description ?? parsed?.fm.description ?? "",
     trigger: parsed?.fm.trigger,
+    author,
     source_sessions: merged,
+    contributors,
     version: prevVersion + 1,
     created_by_agent: parsed?.fm.created_by_agent ?? args.agent,
     created_at: parsed?.fm.created_at ?? now,
@@ -195,7 +229,15 @@ function mergeSkill(args) {
 ${args.body.trim()}
 `;
   writeFileSync(path, text);
-  return { path, action: "merged", version: fm.version, createdAt: fm.created_at, updatedAt: fm.updated_at };
+  return {
+    path,
+    action: "merged",
+    version: fm.version,
+    createdAt: fm.created_at,
+    updatedAt: fm.updated_at,
+    author,
+    contributors
+  };
 }
 function listSkills(skillsRoot) {
   if (!existsSync(skillsRoot))
@@ -220,9 +262,14 @@ function resolveSkillsRoot(install, cwd) {
 function listAllExistingSkills(cwd) {
   const projectRoot = resolveSkillsRoot("project", cwd);
   const globalRoot = resolveSkillsRoot("global", cwd);
+  const tag = (source) => (s) => {
+    const parsed = parseFrontmatter(s.body);
+    const author = typeof parsed?.fm.author === "string" && parsed.fm.author.length > 0 ? parsed.fm.author : void 0;
+    return { name: s.name, body: s.body, source, author };
+  };
   const tagged = [
-    ...listSkills(projectRoot).map((s) => ({ ...s, source: "project" })),
-    ...listSkills(globalRoot).map((s) => ({ ...s, source: "global" }))
+    ...listSkills(projectRoot).map(tag("project")),
+    ...listSkills(globalRoot).map(tag("global"))
   ];
   const seen = /* @__PURE__ */ new Set();
   const out = [];
@@ -242,12 +289,13 @@ function renderExistingSkillsBlock(cwd, charCap) {
       block: "(no existing skills \u2014 MERGE is NOT a valid choice; pick KEEP or SKIP only)"
     };
   }
-  const mergeTargetNames = skills.filter((s) => s.source === "project").map((s) => s.name);
   let total = 0;
   const out = [];
+  const mergeTargetNames = [];
   for (const s of skills) {
-    const tag = s.source === "project" ? "[project]" : "[global, read-only]";
-    const block = `--- existing skill ${tag}: ${s.name} ---
+    const sourceTag = s.source === "project" ? "project" : "global, read-only";
+    const authorTag = s.author ? `, author=${s.author}` : "";
+    const block = `--- existing skill [${sourceTag}${authorTag}]: ${s.name} ---
 ${s.body}
 `;
     if (total + block.length > charCap) {
@@ -256,6 +304,8 @@ ${s.body}
     }
     out.push(block);
     total += block.length;
+    if (s.source === "project")
+      mergeTargetNames.push(s.name);
   }
   return { mergeTargetNames, block: out.join("\n") };
 }
@@ -274,7 +324,11 @@ function sqlIdent(name) {
 // dist/src/skillify/skills-table.js
 function createSkillsTableSql(tableName) {
   const safe = sqlIdent(tableName);
-  return `CREATE TABLE IF NOT EXISTS "${safe}" (id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', install TEXT NOT NULL DEFAULT 'project', source_sessions TEXT NOT NULL DEFAULT '[]', source_agent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'me', author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', trigger_text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '') USING deeplake`;
+  return `CREATE TABLE IF NOT EXISTS "${safe}" (id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', install TEXT NOT NULL DEFAULT 'project', source_sessions TEXT NOT NULL DEFAULT '[]', source_agent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'me', author TEXT NOT NULL DEFAULT '', contributors TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '', trigger_text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '') USING deeplake`;
+}
+function addContributorsColumnSql(tableName) {
+  const safe = sqlIdent(tableName);
+  return `ALTER TABLE "${safe}" ADD COLUMN IF NOT EXISTS contributors TEXT NOT NULL DEFAULT '[]'`;
 }
 function esc(s) {
   return s.replace(/\\/g, "\\\\").replace(/'/g, "''").replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
@@ -282,17 +336,30 @@ function esc(s) {
 function isMissingTableError(message) {
   if (!message)
     return false;
+  if (/\bcolumn\b/i.test(message))
+    return false;
   return /Table does not exist|relation .* does not exist|no such table/i.test(message);
+}
+function isMissingContributorsColumnError(message) {
+  if (!message)
+    return false;
+  return /contributors.*(?:does not exist|not found|unknown)/i.test(message) || /(?:does not exist|unknown column).*contributors/i.test(message);
 }
 async function insertSkillRow(args) {
   const id = args.id ?? randomUUID();
   const sourceSessionsJson = JSON.stringify(args.sourceSessions);
-  const sql = `INSERT INTO "${sqlIdent(args.tableName)}" (id, name, project, project_key, local_path, install, source_sessions, source_agent, scope, author, description, trigger_text, body, version, created_at, updated_at) VALUES ('${esc(id)}', '${esc(args.name)}', '${esc(args.project)}', '${esc(args.projectKey)}', '${esc(args.localPath)}', '${esc(args.install)}', '${esc(sourceSessionsJson)}', '${esc(args.sourceAgent)}', '${esc(args.scope)}', '${esc(args.author)}', '${esc(args.description)}', '${esc(args.trigger ?? "")}', '${esc(args.body)}', ${args.version}, '${esc(args.createdAt)}', '${esc(args.updatedAt)}')`;
+  const contributorsJson = JSON.stringify(args.contributors);
+  const sql = `INSERT INTO "${sqlIdent(args.tableName)}" (id, name, project, project_key, local_path, install, source_sessions, source_agent, scope, author, contributors, description, trigger_text, body, version, created_at, updated_at) VALUES ('${esc(id)}', '${esc(args.name)}', '${esc(args.project)}', '${esc(args.projectKey)}', '${esc(args.localPath)}', '${esc(args.install)}', '${esc(sourceSessionsJson)}', '${esc(args.sourceAgent)}', '${esc(args.scope)}', '${esc(args.author)}', '${esc(contributorsJson)}', '${esc(args.description)}', '${esc(args.trigger ?? "")}', '${esc(args.body)}', ${args.version}, '${esc(args.createdAt)}', '${esc(args.updatedAt)}')`;
   try {
     await args.query(sql);
   } catch (e) {
     if (isMissingTableError(e?.message)) {
       await args.query(createSkillsTableSql(args.tableName));
+      await args.query(sql);
+      return;
+    }
+    if (isMissingContributorsColumnError(e?.message)) {
+      await args.query(addContributorsColumnSql(args.tableName));
       await args.query(sql);
       return;
     }
@@ -445,6 +512,14 @@ function runGate(opts) {
       errorMessage: `${opts.agent} CLI failed: ${e.status ?? e.code ?? e.message}`
     };
   }
+}
+
+// dist/src/skillify/scope-promotion.js
+function isCrossAuthorMergeVerdict(args) {
+  return args.verdict === "MERGE" && args.resultAuthor !== void 0 && args.resultAuthor !== args.userName;
+}
+function resolveRecordScope(args) {
+  return args.isCrossAuthorMerge && args.configScope === "me" ? "team" : args.configScope;
 }
 
 // dist/src/skillify/state.js
@@ -652,8 +727,6 @@ async function query(sql, retries = 4) {
   return [];
 }
 function authorClause() {
-  if (cfg.scope === "org")
-    return "";
   if (cfg.scope === "team" && cfg.team.length > 0) {
     const list = cfg.team.map((n) => `'${esc2(n)}'`).join(", ");
     return ` AND author IN (${list})`;
@@ -721,7 +794,7 @@ ${answer}
 }
 function buildPrompt(pairs) {
   const existing = renderExistingSkillsBlock(cfg.cwd, EXISTING_SKILLS_CHAR_CAP);
-  const mergeTargetsClause = existing.mergeTargetNames.length > 0 ? `MERGE is allowed only if your "name" is EXACTLY one of: [${existing.mergeTargetNames.join(", ")}]. Any other name MUST use KEEP, not MERGE.` : `MERGE is FORBIDDEN \u2014 there are no project skills to merge into. Use KEEP or SKIP only.`;
+  const mergeTargetsClause = existing.mergeTargetNames.length > 0 ? `MERGE is allowed only if your "name" is EXACTLY one of: [${existing.mergeTargetNames.join(", ")}]. Any other name MUST use KEEP, not MERGE.` : `MERGE is FORBIDDEN \u2014 there are no existing skills to merge into. Use KEEP or SKIP only.`;
   return [
     `You are a skill curator for the "${cfg.project}" project. You decide whether the recent`,
     `agent activity below contains a recurring, non-trivial pattern worth crystallizing as a`,
@@ -731,18 +804,19 @@ function buildPrompt(pairs) {
     `- KEEP only if the pattern recurs across at least 3 of the exchanges, is non-obvious to a`,
     `  competent engineer, and is not already covered by an existing skill below.`,
     `- SKIP if the activity is one-off, generic engineering work, or already covered.`,
-    `- MERGE if the pattern is a meaningful extension of an existing PROJECT skill \u2014 produce a`,
+    `- MERGE if the pattern is a meaningful extension of an existing skill \u2014 produce a`,
     `  merged body that incorporates the new evidence without exceeding ~3000 characters or`,
     `  covering unrelated domains.`,
     `- ${mergeTargetsClause}`,
-    `- Skills tagged [global, read-only] are autopulled from the team's shared skills`,
-    `  table. They exist so you can recognise patterns already covered globally and pick`,
-    `  SKIP (or a more specific KEEP) instead of duplicating them. They are NOT valid`,
-    `  MERGE targets \u2014 only [project] skills can be merged into.`,
+    `- Cross-author MERGE has a real cost: editing a skill authored by someone else is`,
+    `  recorded as a team-level edit (scope=team, contributors+="${cfg.userName}"). Use it only`,
+    `  when the new evidence genuinely extends the existing skill; otherwise pick KEEP or SKIP.`,
+    `  Tags like [project, author=alice] / [global, author=bob] tell you whose skill it is.`,
     `- Skill bodies should follow the existing style: short sections (When to use, Workflow,`,
     `  Anti-patterns), concrete commands and file paths drawn from the exchanges, no marketing.`,
     ``,
-    `=== EXISTING SKILLS ([project] are MERGE-eligible, [global] are reference only) ===`,
+    `=== EXISTING SKILLS (all MERGE-eligible; [global, author=X] entries from teammate X mean`,
+    `cross-author MERGE auto-promotes scope to team) ===`,
     existing.block,
     ``,
     `=== RECENT EXCHANGES (prompt + answer pairs, tool calls already stripped) ===`,
@@ -865,6 +939,17 @@ async function main() {
     const watermarkDate = oldest.lastMsg;
     const sourceSessions = usable.map((c) => (c.path.split("/").pop() ?? "").replace(/\.[^.]+$/, ""));
     async function recordToDeeplake(result, verdict2) {
+      const author = result.author ?? cfg.userName;
+      const isCrossAuthorMerge = isCrossAuthorMergeVerdict({
+        verdict: verdict2.verdict,
+        resultAuthor: result.author,
+        userName: cfg.userName
+      });
+      const scope = resolveRecordScope({
+        configScope: cfg.scope,
+        isCrossAuthorMerge
+      });
+      const contributors = result.contributors;
       try {
         await insertSkillRow({
           query,
@@ -876,8 +961,9 @@ async function main() {
           install: cfg.install,
           sourceSessions,
           sourceAgent: cfg.agent,
-          scope: cfg.scope,
-          author: cfg.userName,
+          scope,
+          author,
+          contributors,
           description: verdict2.description ?? "",
           trigger: verdict2.trigger,
           body: verdict2.body,
@@ -885,7 +971,7 @@ async function main() {
           createdAt: result.createdAt,
           updatedAt: result.updatedAt
         });
-        wlog(`recorded to skills table: name=${verdict2.name} v${result.version}`);
+        wlog(`recorded to skills table: name=${verdict2.name} v${result.version} author=${author} scope=${scope} contributors=${contributors.length}` + (isCrossAuthorMerge ? " [auto-promoted me->team]" : ""));
       } catch (e) {
         wlog(`skills table insert failed (non-fatal): ${e.message}`);
       }
@@ -899,7 +985,8 @@ async function main() {
           trigger: verdict.trigger,
           body: verdict.body,
           sourceSessions,
-          agent: cfg.agent
+          agent: cfg.agent,
+          author: cfg.userName
         });
         wlog(`wrote new skill: ${result.path}`);
         recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
@@ -916,7 +1003,8 @@ async function main() {
           description: verdict.description,
           body: verdict.body,
           newSourceSessions: sourceSessions,
-          agent: cfg.agent
+          agent: cfg.agent,
+          editor: cfg.userName
         });
         wlog(`merged into skill: ${result.path} (v${result.version})`);
         recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
@@ -932,7 +1020,8 @@ async function main() {
               trigger: verdict.trigger,
               body: verdict.body,
               sourceSessions,
-              agent: cfg.agent
+              agent: cfg.agent,
+              author: cfg.userName
             });
             wlog(`wrote new skill (merge fallback): ${result.path}`);
             recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
