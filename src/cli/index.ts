@@ -80,7 +80,7 @@ Skill management (mine + share reusable Claude skills across the org):
                                            --to <project|global>, --dry-run,
                                            --all (also locally-mined),
                                            --legacy-cleanup (pre-suffix-author dirs).
-  hivemind skillify scope <me|team|org>     Set the sharing scope for newly mined skills.
+  hivemind skillify scope <me|team>         Set the sharing scope for newly mined skills.
   hivemind skillify install <project|global>  Set where new skills are written.
   hivemind skillify promote <name>          Move a project skill to the global location.
   hivemind skillify team add <username>     Add a username to the team list.

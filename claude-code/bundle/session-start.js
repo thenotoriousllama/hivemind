@@ -1402,7 +1402,7 @@ Skill management (mine + share reusable Claude skills across the org):
 - hivemind skillify unpull --user <email>            \u2014 remove only that author's pulls
 - hivemind skillify unpull --not-mine                \u2014 remove all pulls except your own
 - hivemind skillify unpull --dry-run                 \u2014 preview without touching disk
-- hivemind skillify scope <me|team|org>              \u2014 sharing scope for newly mined skills
+- hivemind skillify scope <me|team>                  \u2014 sharing scope for newly mined skills
 - hivemind skillify install <project|global>         \u2014 default install location for new skills
 - hivemind skillify promote <skill-name>             \u2014 move a project skill to the global location
 - hivemind skillify team add|remove|list <name>      \u2014 manage team member list

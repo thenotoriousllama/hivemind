@@ -72,7 +72,7 @@ Skill management (mine + share reusable Claude skills across the org):
 - hivemind skillify unpull --user <email>            — remove only that author's pulls
 - hivemind skillify unpull --not-mine                — remove all pulls except your own
 - hivemind skillify unpull --dry-run                 — preview without touching disk
-- hivemind skillify scope <me|team|org>              — sharing scope for newly mined skills
+- hivemind skillify scope <me|team>                  — sharing scope for newly mined skills
 - hivemind skillify install <project|global>         — default install location for new skills
 - hivemind skillify promote <skill-name>             — move a project skill to the global location
 - hivemind skillify team add|remove|list <name>      — manage team member list
