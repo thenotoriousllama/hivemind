@@ -139,7 +139,18 @@ function resolveCommand(command: string, pluginRoot: string): string {
 }
 
 function isHivemindMatcher(matcher: HookMatcher): boolean {
-  return matcher.hooks?.some(h => typeof h.command === "string" && h.command.includes("plugins/hivemind/bundle/")) ?? false;
+  // Normalize Windows backslashes to forward slashes before the substring
+  // check — `resolveCommand` produces platform-native paths, so a Windows
+  // install would carry `plugins\hivemind\bundle\...` which the POSIX-style
+  // fragment misses. Without this normalization a Windows user's existing
+  // hivemind entries would NOT match, leaving them in `preserved` while
+  // the canonical entries get appended too — duplicating hook registration
+  // on every install/update. (Caught by CodeRabbit, PR #128.)
+  return matcher.hooks?.some(h => {
+    if (typeof h.command !== "string") return false;
+    const normalized = h.command.replace(/\\/g, "/");
+    return normalized.includes("plugins/hivemind/bundle/");
+  }) ?? false;
 }
 
 export function syncHivemindHooksToSettings(): { changed: boolean; events: string[] } {

@@ -38,7 +38,12 @@ async function main(): Promise<void> {
   // current session — two parallel hook fires for the same session share
   // the same id and dedupe to one emission via the atomic claim file.
   const input = await readStdin<SessionStartInput>().catch(() => ({} as SessionStartInput));
-  const sessionId = typeof input?.session_id === "string" ? input.session_id : undefined;
+  // Trim + non-empty check: an empty or whitespace-only session_id would
+  // collapse the dedupKey across unrelated sessions. fetchLocalUsageNotifications
+  // already returns [] when sessionId is undefined; route there instead of
+  // letting an empty string slip through.
+  const rawSessionId = typeof input?.session_id === "string" ? input.session_id.trim() : "";
+  const sessionId = rawSessionId.length > 0 ? rawSessionId : undefined;
 
   const creds = loadCredentials();
   await drainSessionStart({ agent: "claude-code", creds, sessionId });

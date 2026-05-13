@@ -414,3 +414,58 @@ describe("syncHivemindHooksToSettings", () => {
     expect(syncHivemindHooksToSettings()).toEqual({ changed: false, events: [] });
   });
 });
+
+describe("syncHivemindHooksToSettings — Windows path handling (CodeRabbit PR#128)", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const os = require("node:os");
+  let TEMP_HOME = "";
+  let ORIGINAL_HOME: string | undefined;
+
+  beforeEach(() => {
+    TEMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "hivemind-sync-win-test-"));
+    ORIGINAL_HOME = process.env.HOME;
+    process.env.HOME = TEMP_HOME;
+    execFileSyncMock.mockReset();
+  });
+  afterEach(() => {
+    if (ORIGINAL_HOME !== undefined) process.env.HOME = ORIGINAL_HOME;
+    else delete process.env.HOME;
+    fs.rmSync(TEMP_HOME, { recursive: true, force: true });
+  });
+
+  it("recognizes Windows-style hivemind matcher (backslash path) and replaces it instead of duplicating", async () => {
+    // Bootstrap marketplace hooks.json so sync proceeds.
+    const dir = path.join(TEMP_HOME, ".claude", "plugins", "marketplaces", "hivemind", "claude-code", "hooks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "hooks.json"), JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [
+          { type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/bundle/session-start.js"', timeout: 10 },
+        ] }],
+      },
+    }), "utf-8");
+
+    // Seed settings.json with a Windows-style legacy entry.
+    fs.mkdirSync(path.join(TEMP_HOME, ".claude"), { recursive: true });
+    const legacyWindowsEntry = {
+      hooks: {
+        SessionStart: [{ hooks: [
+          { type: "command", command: 'node "C:\\Users\\Alice\\.claude\\plugins\\hivemind\\bundle\\session-start.js"', timeout: 99 },
+        ] }],
+      },
+    };
+    fs.writeFileSync(path.join(TEMP_HOME, ".claude", "settings.json"), JSON.stringify(legacyWindowsEntry), "utf-8");
+
+    const { syncHivemindHooksToSettings } = await importFresh();
+    syncHivemindHooksToSettings();
+
+    const s = JSON.parse(fs.readFileSync(path.join(TEMP_HOME, ".claude", "settings.json"), "utf-8"));
+    const hooks = s.hooks.SessionStart[0].hooks;
+    // CRITICAL: there must be EXACTLY ONE hook entry (the new one). If the
+    // Windows entry weren't recognized as hivemind-owned, we'd see TWO.
+    expect(hooks).toHaveLength(1);
+    // And the surviving entry is the canonical (resolved) one, not the legacy.
+    expect(hooks[0].timeout).toBe(10);
+  });
+});

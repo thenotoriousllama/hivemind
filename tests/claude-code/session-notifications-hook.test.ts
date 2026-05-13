@@ -141,3 +141,63 @@ describe("session-notifications hook entry — main()", () => {
     expect(stdout).toEqual([]);
   });
 });
+
+describe("session-notifications hook — empty session_id handling (CodeRabbit PR#128)", () => {
+  it("treats empty session_id as undefined (avoids dedupKey collapse across sessions)", async () => {
+    plantCreds();
+    const drainSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock("../../src/utils/stdin.js", () => ({
+      readStdin: vi.fn().mockResolvedValue({ session_id: "" }),
+    }));
+    vi.doMock("../../src/notifications/index.js", async (importOriginal) => {
+      const mod = (await importOriginal()) as any;
+      return { ...mod, drainSessionStart: drainSpy };
+    });
+
+    await import("../../src/notifications/index.js").then(m => m._resetRulesForTest());
+    await import("../../src/hooks/session-notifications.js");
+    await new Promise(r => setImmediate(r));
+
+    expect(drainSpy).toHaveBeenCalledTimes(1);
+    expect(drainSpy.mock.calls[0][0].sessionId).toBeUndefined();
+  });
+
+  it("treats whitespace-only session_id as undefined", async () => {
+    plantCreds();
+    const drainSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock("../../src/utils/stdin.js", () => ({
+      readStdin: vi.fn().mockResolvedValue({ session_id: "   \t  " }),
+    }));
+    vi.doMock("../../src/notifications/index.js", async (importOriginal) => {
+      const mod = (await importOriginal()) as any;
+      return { ...mod, drainSessionStart: drainSpy };
+    });
+
+    await import("../../src/notifications/index.js").then(m => m._resetRulesForTest());
+    await import("../../src/hooks/session-notifications.js");
+    await new Promise(r => setImmediate(r));
+
+    expect(drainSpy.mock.calls[0][0].sessionId).toBeUndefined();
+  });
+
+  it("passes through a real session_id verbatim (no trim mangling of valid IDs)", async () => {
+    plantCreds();
+    const drainSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock("../../src/utils/stdin.js", () => ({
+      readStdin: vi.fn().mockResolvedValue({ session_id: "abc-12345-uuid" }),
+    }));
+    vi.doMock("../../src/notifications/index.js", async (importOriginal) => {
+      const mod = (await importOriginal()) as any;
+      return { ...mod, drainSessionStart: drainSpy };
+    });
+
+    await import("../../src/notifications/index.js").then(m => m._resetRulesForTest());
+    await import("../../src/hooks/session-notifications.js");
+    await new Promise(r => setImmediate(r));
+
+    expect(drainSpy.mock.calls[0][0].sessionId).toBe("abc-12345-uuid");
+  });
+});

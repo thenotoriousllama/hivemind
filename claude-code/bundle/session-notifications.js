@@ -450,7 +450,8 @@ async function main() {
   if (process.env.HIVEMIND_WIKI_WORKER === "1")
     return;
   const input = await readStdin().catch(() => ({}));
-  const sessionId = typeof input?.session_id === "string" ? input.session_id : void 0;
+  const rawSessionId = typeof input?.session_id === "string" ? input.session_id.trim() : "";
+  const sessionId = rawSessionId.length > 0 ? rawSessionId : void 0;
   const creds = loadCredentials();
   await drainSessionStart({ agent: "claude-code", creds, sessionId });
 }

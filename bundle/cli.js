@@ -194,7 +194,12 @@ function resolveCommand(command, pluginRoot) {
   return command.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, pluginRoot);
 }
 function isHivemindMatcher(matcher) {
-  return matcher.hooks?.some((h) => typeof h.command === "string" && h.command.includes("plugins/hivemind/bundle/")) ?? false;
+  return matcher.hooks?.some((h) => {
+    if (typeof h.command !== "string")
+      return false;
+    const normalized = h.command.replace(/\\/g, "/");
+    return normalized.includes("plugins/hivemind/bundle/");
+  }) ?? false;
 }
 function syncHivemindHooksToSettings() {
   const hooksPath = marketplaceHooksJsonPath();
