@@ -20,6 +20,7 @@ export default defineConfig({
   test: {
     include: [
       "tests/claude-code/**/*.test.ts",
+      "tests/cli/**/*.test.ts",
       "tests/codex/**/*.test.ts",
       "tests/cursor/**/*.test.ts",
       "tests/hermes/**/*.test.ts",
