@@ -245,7 +245,7 @@ describe("runMineLocal: orchestrator branches", () => {
     expect(manifest.entries[0].uploaded).toBe(false);
   });
 
-  it("0 candidates: no writeNewSkill, no manifest write, tmp dir kept", async () => {
+  it("0 candidates: no writeNewSkill, manifest STILL persisted as one-shot sentinel", async () => {
     const old = Date.now() - 5 * 60_000;
     listLocalSessions.mockReturnValueOnce([makeSession("aaaaaaaa", old)]);
     extractPairs.mockReturnValue([{ prompt: "p", answer: "a" }]);
@@ -253,8 +253,36 @@ describe("runMineLocal: orchestrator branches", () => {
     const mod = await importOrch();
     await mod.runMineLocal([]);
     expect(writeNewSkill).not.toHaveBeenCalled();
-    expect(writeLocalManifest).not.toHaveBeenCalled();
+    // Manifest IS written (empty entries) so the SessionStart auto-spawn
+    // doesn't re-fire on every session: the sentinel-existence check gates
+    // re-mining, not the entries array.
+    expect(writeLocalManifest).toHaveBeenCalledTimes(1);
+    const manifest = writeLocalManifest.mock.calls[0][0];
+    expect(manifest.entries).toEqual([]);
+    expect(typeof manifest.created_at).toBe("string");
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("No skills to write"));
+  });
+
+  it("0 candidates with pre-existing manifest: created_at preserved", async () => {
+    const old = Date.now() - 5 * 60_000;
+    listLocalSessions.mockReturnValueOnce([makeSession("aaaaaaaa", old)]);
+    extractPairs.mockReturnValue([{ prompt: "p", answer: "a" }]);
+    spawnBehavior.stdout = JSON.stringify({ reason: "nothing", skills: [] });
+    // readLocalManifest is called twice: once by the sentinel check at the
+    // top of runMineLocalImpl, once again inside the 0-candidates branch to
+    // preserve `created_at`. Both calls must return the existing manifest.
+    const existing = {
+      created_at: "2026-01-01T00:00:00Z",
+      entries: [{ skill_name: "old", canonical_path: "/x", symlinks: [], source_session_ids: [], source_session_paths: [], source_agent: "claude_code", gate_agent: "claude_code", created_at: "2026-01-01T00:00:00Z", uploaded: false }],
+    };
+    readLocalManifest.mockReturnValue(existing);
+    // With manifest existing, runMineLocal exits unless --force is passed.
+    const mod = await importOrch();
+    await mod.runMineLocal(["--force"]);
+    expect(writeLocalManifest).toHaveBeenCalledTimes(1);
+    const m = writeLocalManifest.mock.calls[0][0];
+    expect(m.created_at).toBe("2026-01-01T00:00:00Z");
+    expect(m.entries).toHaveLength(1);
   });
 
   it("no usable pairs in a session → marked skipped, no gate call for it", async () => {
@@ -343,6 +371,33 @@ describe("runMineLocal: orchestrator branches", () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("failed permerr"));
   });
 
+  it("writeNewSkill throws a non-Error value (no .message) → 'failed' branch handles it", async () => {
+    const old = Date.now() - 5 * 60_000;
+    listLocalSessions.mockReturnValueOnce([makeSession("aaaaaaaa", old)]);
+    extractPairs.mockReturnValue([{ prompt: "p", answer: "a" }]);
+    spawnBehavior.stdout = JSON.stringify({
+      reason: "ok",
+      skills: [{ name: "weird", description: "fresh thing", body: "b" }],
+    });
+    // Throw a plain object — covers the `e.message ?? ""` nullish coalesce.
+    writeNewSkill.mockImplementationOnce(() => { throw {} as any; });
+    const mod = await importOrch();
+    await mod.runMineLocal([]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("failed weird"));
+  });
+
+  it("gate returns parseMultiVerdict with null reason → falls through to default string", async () => {
+    const old = Date.now() - 5 * 60_000;
+    listLocalSessions.mockReturnValueOnce([makeSession("aaaaaaaa", old)]);
+    extractPairs.mockReturnValue([{ prompt: "p", answer: "a" }]);
+    // No 'reason' field at all → parseMultiVerdict returns reason: undefined
+    spawnBehavior.stdout = JSON.stringify({ skills: [] });
+    const mod = await importOrch();
+    await mod.runMineLocal([]);
+    // The "no reason given" string is the fallback for the `mv.reason ??` branch.
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("no reason given"));
+  });
+
   it("--n all uses all available sessions", async () => {
     const old = Date.now() - 5 * 60_000;
     const sessions = [makeSession("a", old), makeSession("b", old - 1), makeSession("c", old - 2)];
@@ -387,16 +442,27 @@ describe("runMineLocal: orchestrator branches", () => {
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("--n requires a value"));
   });
 
-  it("host agent missing → falls back to first install agent", async () => {
-    const old = Date.now() - 5 * 60_000;
-    detectHostAgent.mockReturnValueOnce(null);
+  it("codex-only install (no claude_code) → exits 1 with clear gate-agent error", async () => {
+    detectHostAgent.mockReturnValueOnce("codex");
     detectInstalledAgents.mockReturnValueOnce([
       { agent: "codex", sessionRoot: "/c", encodeCwd: () => "x" },
+    ]);
+    const mod = await importOrch();
+    await expect(mod.runMineLocal([])).rejects.toThrow("__exit_1__");
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("mine-local v1 requires the Claude Code CLI"));
+  });
+
+  it("host = codex but claude_code installed → mining uses claude_code as gate", async () => {
+    const old = Date.now() - 5 * 60_000;
+    detectHostAgent.mockReturnValueOnce("codex");
+    detectInstalledAgents.mockReturnValueOnce([
+      { agent: "codex", sessionRoot: "/c", encodeCwd: () => "x" },
+      { agent: "claude_code", sessionRoot: "/cc", encodeCwd: () => "x" },
     ]);
     listLocalSessions.mockReturnValueOnce([makeSession("a", old, "codex")]);
     const mod = await importOrch();
     await mod.runMineLocal(["--dry-run"]);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("codex"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Gate CLI: claude_code"));
   });
 
   it("exercises truncate branch with prompts > PAIR_CHAR_CAP (4000)", async () => {

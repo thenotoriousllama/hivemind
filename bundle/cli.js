@@ -6180,7 +6180,10 @@ function parseMultiVerdict(raw) {
   }
   return { reason: typeof parsed.reason === "string" ? parsed.reason : void 0, skills: out };
 }
-function gateAgentFor(host, fallback) {
+function gateAgentFor(host, fallback, installs) {
+  const installed = new Set(installs.map((i) => i.agent));
+  if (installed.has("claude_code"))
+    return "claude_code";
   return host ?? fallback;
 }
 async function parallelMap(items, concurrency, fn) {
@@ -6326,7 +6329,13 @@ async function runMineLocalImpl(args) {
   console.log(`Detected installed agents: ${installs.map((i) => i.agent).join(", ")}`);
   const host = detectHostAgent();
   const fallback = installs[0].agent;
-  const gateAgent = gateAgentFor(host, fallback);
+  const gateAgent = gateAgentFor(host, fallback, installs);
+  if (gateAgent !== "claude_code") {
+    console.error(`mine-local v1 requires the Claude Code CLI as its LLM gate.`);
+    console.error(`Detected gate agent: ${gateAgent} (no claude_code session dir found at ~/.claude/projects/).`);
+    console.error(`Install Claude Code, or run a Claude Code session once, then re-run.`);
+    process.exit(1);
+  }
   const gateBin = findAgentBin(gateAgent);
   console.log(`Gate CLI: ${gateAgent} (${gateBin})${host ? " \u2014 host-agent detected" : ""}`);
   const cwd = process.cwd();
@@ -6390,6 +6399,11 @@ async function runMineLocalImpl(args) {
   console.log("");
   console.log(`Got ${totalCandidates} candidate(s) across ${picked.length} session(s). Checking overlap against ${existingSummaries.length} installed skill(s) + each new write.`);
   if (totalCandidates === 0) {
+    const existing = loadManifest2();
+    saveManifest2({
+      created_at: existing?.created_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+      entries: existing?.entries ?? []
+    });
     console.log(`No skills to write.`);
     console.log(`tmp dir kept for inspection: ${tmpDir}`);
     return;
@@ -6597,7 +6611,7 @@ function usage() {
   console.log("  hivemind skillify status                     show per-project state");
   console.log("  hivemind skillify mine-local [opts]          one-shot: seed skills from local sessions (no auth needed)");
   console.log("    Options for mine-local:");
-  console.log("      --n <num|all>             how many sessions to mine (default: 3)");
+  console.log("      --n <num|all>             how many sessions to mine (default: 8)");
   console.log("      --force                   re-run even if the manifest sentinel exists");
   console.log("      --dry-run                 stop before calling the LLM gate");
 }

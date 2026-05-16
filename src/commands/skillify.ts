@@ -195,7 +195,7 @@ function usage(): void {
   console.log("  hivemind skillify status                     show per-project state");
   console.log("  hivemind skillify mine-local [opts]          one-shot: seed skills from local sessions (no auth needed)");
   console.log("    Options for mine-local:");
-  console.log("      --n <num|all>             how many sessions to mine (default: 3)");
+  console.log("      --n <num|all>             how many sessions to mine (default: 8)");
   console.log("      --force                   re-run even if the manifest sentinel exists");
   console.log("      --dry-run                 stop before calling the LLM gate");
 }

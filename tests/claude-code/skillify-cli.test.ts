@@ -450,6 +450,13 @@ describe("usage", () => {
     runSkillifyCommand(["--help"]);
     expect(logged.join("\n")).toMatch(/mine-local/);
   });
+
+  it("--help documents the correct --n default (matches DEFAULT_N = 8)", () => {
+    runSkillifyCommand(["--help"]);
+    // DEFAULT_N in src/commands/mine-local.ts is 8 — help text must agree.
+    expect(logged.join("\n")).toMatch(/--n.*default: 8/);
+    expect(logged.join("\n")).not.toMatch(/--n.*default: 3/);
+  });
 });
 
 // ── mine-local subcommand wiring ──────────────────────────────────────────

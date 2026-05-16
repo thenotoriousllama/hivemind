@@ -31,6 +31,7 @@ import {
   listLocalSessions,
   pickSessions,
   nativeJsonlToRows,
+  type AgentInstall,
   type LocalAgent,
   type SessionFile,
 } from "../skillify/local-source.js";
@@ -280,7 +281,24 @@ export function parseMultiVerdict(raw: string): MultiVerdict | null {
   return { reason: typeof parsed.reason === "string" ? parsed.reason : undefined, skills: out };
 }
 
-function gateAgentFor(host: LocalAgent | null, fallback: LocalAgent): Agent {
+/**
+ * Pick the LLM gate to invoke for mining. v1 only ships a working
+ * stdin-prompt path for claude_code (see runGateViaStdin — argv-bound for
+ * other agents would hit MAX_ARG_STRLEN on the prompts we build). So if
+ * Claude Code is installed locally we always pick it, even when the host
+ * agent is something else (e.g. running mine-local inside a Codex session
+ * on a machine that also has Claude Code). Only fall back to the host /
+ * first-install when claude_code isn't available, and the caller is
+ * expected to fail fast in that case rather than burn through every
+ * session with `runGateViaStdin` rejecting each one.
+ */
+function gateAgentFor(
+  host: LocalAgent | null,
+  fallback: LocalAgent,
+  installs: AgentInstall[],
+): Agent {
+  const installed = new Set(installs.map(i => i.agent));
+  if (installed.has("claude_code")) return "claude_code" as Agent;
   return (host ?? fallback) as Agent;
 }
 
@@ -440,7 +458,18 @@ async function runMineLocalImpl(args: string[]): Promise<void> {
 
   const host = detectHostAgent();
   const fallback = installs[0].agent;
-  const gateAgent = gateAgentFor(host, fallback);
+  const gateAgent = gateAgentFor(host, fallback, installs);
+  // Fail fast when no supported gate is available. runGateViaStdin v1 only
+  // implements the stdin-prompt path for claude_code; other agents hit the
+  // synchronous "stdin gate runner only supports claude_code" rejection
+  // inside every parallel call, producing a silent no-op (0 skills mined,
+  // exit 0). Better to surface the constraint upfront with a concrete fix.
+  if (gateAgent !== "claude_code") {
+    console.error(`mine-local v1 requires the Claude Code CLI as its LLM gate.`);
+    console.error(`Detected gate agent: ${gateAgent} (no claude_code session dir found at ~/.claude/projects/).`);
+    console.error(`Install Claude Code, or run a Claude Code session once, then re-run.`);
+    process.exit(1);
+  }
   const gateBin = findAgentBin(gateAgent);
   console.log(`Gate CLI: ${gateAgent} (${gateBin})${host ? " — host-agent detected" : ""}`);
 
@@ -532,6 +561,16 @@ async function runMineLocalImpl(args: string[]): Promise<void> {
   console.log(`Got ${totalCandidates} candidate(s) across ${picked.length} session(s). Checking overlap against ${existingSummaries.length} installed skill(s) + each new write.`);
 
   if (totalCandidates === 0) {
+    // Still persist an empty manifest so the file doubles as the one-shot
+    // sentinel: without it, the SessionStart auto-spawn (maybeAutoMineLocal)
+    // would re-fire on every new session because it gates on manifest
+    // existence, not content. Equally, SessionStart's countLocalManifestEntries()
+    // surface still reports a deterministic 0 instead of "no mining run yet".
+    const existing = loadManifest();
+    saveManifest({
+      created_at: existing?.created_at ?? new Date().toISOString(),
+      entries: existing?.entries ?? [],
+    });
     console.log(`No skills to write.`);
     console.log(`tmp dir kept for inspection: ${tmpDir}`);
     return;
