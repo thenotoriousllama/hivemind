@@ -16,6 +16,7 @@ import { readState, statePath } from "../../src/notifications/state.js";
 import { readQueue, queuePath } from "../../src/notifications/queue.js";
 import { renderNotifications } from "../../src/notifications/format.js";
 import { welcomeRule } from "../../src/notifications/rules/welcome.js";
+import { localMinedRule } from "../../src/notifications/rules/local-mined.js";
 import type { Credentials } from "../../src/commands/auth-creds.js";
 
 /**
@@ -124,6 +125,90 @@ describe("welcomeRule", () => {
       state: { shown: {} },
     });
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// localMinedRule — fires when not-logged-in + manifest has entries
+// ---------------------------------------------------------------------------
+
+describe("localMinedRule", () => {
+  it("returns null when creds are present (logged-in users see welcomeRule instead)", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: FRESH_CREDS,
+      state: { shown: {} },
+      localSkillsCount: 5,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when localSkillsCount is missing (no mining run yet)", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+      // localSkillsCount intentionally omitted
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when localSkillsCount is null", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+      localSkillsCount: null,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when manifest exists but is empty (0 skills)", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+      localSkillsCount: 0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("fires with plural noun when count > 1", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+      localSkillsCount: 5,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("local-mined-surfaced");
+    expect(result!.title).toContain("5 skills");
+    expect(result!.body).toContain("hivemind login");
+    expect(result!.dedupKey).toEqual({ count: 5 });
+  });
+
+  it("fires with singular noun when count === 1", () => {
+    const result = localMinedRule.evaluate({
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+      localSkillsCount: 1,
+    });
+    expect(result).not.toBeNull();
+    // The singular branch of the noun ternary.
+    expect(result!.title).toContain("1 skill mined");
+    expect(result!.title).not.toContain("skills mined");
+    expect(result!.dedupKey).toEqual({ count: 1 });
+  });
+
+  it("dedupKey changes with count, so re-mining re-fires the notification", () => {
+    const r5 = localMinedRule.evaluate({
+      agent: "claude-code", creds: null, state: { shown: {} }, localSkillsCount: 5,
+    });
+    const r7 = localMinedRule.evaluate({
+      agent: "claude-code", creds: null, state: { shown: {} }, localSkillsCount: 7,
+    });
+    expect(r5!.dedupKey).not.toEqual(r7!.dedupKey);
   });
 });
 
