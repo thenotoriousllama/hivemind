@@ -110,6 +110,16 @@ function withQueueLock<T>(fn: () => T): T {
   }
 }
 
+function sameDedupKey(a: Notification, b: Notification): boolean {
+  if (a.id !== b.id) return false;
+  // JSON.stringify is canonical enough here — dedupKey values come from
+  // a small set of producers we control (transformers-missing detail,
+  // welcome-shown timestamps, summarization counts). Field-order
+  // determinism comes from the producers writing object literals in a
+  // stable shape, which we already rely on for state.ts dedup.
+  return JSON.stringify(a.dedupKey) === JSON.stringify(b.dedupKey);
+}
+
 /**
  * Append a notification to the persistent queue. Cross-process safe via
  * an advisory `.lock` file: concurrent producers serialize on the lock so
@@ -117,10 +127,22 @@ function withQueueLock<T>(fn: () => T): T {
  * race here would both read the same starting state, push their own
  * entry, and the second `rename(2)` would clobber the first writer's
  * addition.
+ *
+ * Idempotent under (id, dedupKey): if an equivalent notification is
+ * already queued (i.e. a previous hook enqueued the same warning but the
+ * SessionStart drain hasn't run yet), the second call is a no-op. Without
+ * this, every hook process that hits an `embed-deps-missing` would pile
+ * another copy onto the queue between drains — the in-process
+ * `_signalledMissingDeps` flag in client.ts only dedups inside one
+ * process. The drain layer already dedups against the *shown* state in
+ * state.ts; this guard prevents redundant queue growth between drains.
  */
 export function enqueueNotification(n: Notification): void {
   withQueueLock(() => {
     const q = readQueue();
+    if (q.queue.some(existing => sameDedupKey(existing, n))) {
+      return;
+    }
     q.queue.push(n);
     writeQueue(q);
   });

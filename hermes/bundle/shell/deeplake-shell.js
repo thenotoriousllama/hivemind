@@ -67780,9 +67780,17 @@ function withQueueLock(fn4) {
     }
   }
 }
+function sameDedupKey(a15, b26) {
+  if (a15.id !== b26.id)
+    return false;
+  return JSON.stringify(a15.dedupKey) === JSON.stringify(b26.dedupKey);
+}
 function enqueueNotification(n24) {
   withQueueLock(() => {
     const q17 = readQueue();
+    if (q17.queue.some((existing) => sameDedupKey(existing, n24))) {
+      return;
+    }
     q17.queue.push(n24);
     writeQueue(q17);
   });

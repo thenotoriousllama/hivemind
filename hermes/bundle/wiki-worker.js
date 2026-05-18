@@ -248,9 +248,17 @@ function withQueueLock(fn) {
     }
   }
 }
+function sameDedupKey(a, b) {
+  if (a.id !== b.id)
+    return false;
+  return JSON.stringify(a.dedupKey) === JSON.stringify(b.dedupKey);
+}
 function enqueueNotification(n) {
   withQueueLock(() => {
     const q = readQueue();
+    if (q.queue.some((existing) => sameDedupKey(existing, n))) {
+      return;
+    }
     q.queue.push(n);
     writeQueue(q);
   });
