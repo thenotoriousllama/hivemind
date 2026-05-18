@@ -405,25 +405,31 @@ function spawnSkillifyWorker(opts) {
 }
 
 // dist/src/skillify/state.js
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync4, writeSync as writeSync2, mkdirSync as mkdirSync5, renameSync as renameSync3, rmSync, existsSync as existsSync5, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
+import { readFileSync as readFileSync4, writeFileSync as writeFileSync4, writeSync as writeSync2, mkdirSync as mkdirSync5, renameSync as renameSync3, rmSync, existsSync as existsSync5, lstatSync, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
 import { execSync as execSync2 } from "node:child_process";
-import { homedir as homedir8 } from "node:os";
 import { createHash } from "node:crypto";
-import { join as join10, basename } from "node:path";
+import { join as join11, basename } from "node:path";
 
 // dist/src/skillify/legacy-migration.js
 import { existsSync as existsSync4, renameSync as renameSync2 } from "node:fs";
+import { dirname as dirname4, join as join10 } from "node:path";
+
+// dist/src/skillify/state-dir.js
 import { homedir as homedir7 } from "node:os";
 import { join as join9 } from "node:path";
+function getStateDir() {
+  return process.env.HIVEMIND_STATE_DIR ?? join9(homedir7(), ".deeplake", "state", "skillify");
+}
+
+// dist/src/skillify/legacy-migration.js
 var dlog2 = (msg) => log("skillify-migrate", msg);
-var attempted = false;
+var attemptedFor = /* @__PURE__ */ new Set();
 function migrateLegacyStateDir() {
-  if (attempted)
+  const current = getStateDir();
+  if (attemptedFor.has(current))
     return;
-  attempted = true;
-  const root = join9(homedir7(), ".deeplake", "state");
-  const legacy = join9(root, "skilify");
-  const current = join9(root, "skillify");
+  attemptedFor.add(current);
+  const legacy = join10(dirname4(current), "skilify");
   if (!existsSync4(legacy))
     return;
   if (existsSync4(current))
@@ -443,19 +449,16 @@ function migrateLegacyStateDir() {
 
 // dist/src/skillify/state.js
 var dlog3 = (msg) => log("skillify-state", msg);
-function getStateDir() {
-  return process.env.HIVEMIND_STATE_DIR ?? join10(homedir8(), ".deeplake", "state", "skillify");
-}
 var YIELD_BUF2 = new Int32Array(new SharedArrayBuffer(4));
 var TRIGGER_THRESHOLD = (() => {
   const n = Number(process.env.HIVEMIND_SKILLIFY_EVERY_N_TURNS ?? "");
   return Number.isInteger(n) && n > 0 ? n : 20;
 })();
 function statePath(projectKey) {
-  return join10(getStateDir(), `${projectKey}.json`);
+  return join11(getStateDir(), `${projectKey}.json`);
 }
 function lockPath2(projectKey) {
-  return join10(getStateDir(), `${projectKey}.lock`);
+  return join11(getStateDir(), `${projectKey}.lock`);
 }
 var DEFAULT_PORTS = {
   http: "80",
@@ -575,16 +578,22 @@ function tryAcquireWorkerLock(projectKey, maxAgeMs = 10 * 60 * 1e3) {
     try {
       unlinkSync2(p);
     } catch (unlinkErr) {
-      if (unlinkErr?.code === "EISDIR") {
+      if (unlinkErr?.code !== "EISDIR") {
+        dlog3(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
+        return false;
+      }
+      let isDir = false;
+      try {
+        isDir = lstatSync(p).isDirectory();
+      } catch {
+      }
+      if (isDir) {
         try {
           rmSync(p, { recursive: true, force: true });
         } catch (rmErr) {
           dlog3(`could not remove stale dir-lock for ${projectKey}: ${rmErr.message}`);
           return false;
         }
-      } else {
-        dlog3(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
-        return false;
       }
     }
   }
@@ -610,13 +619,14 @@ function releaseWorkerLock(projectKey) {
 
 // dist/src/skillify/scope-config.js
 import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-import { join as join11 } from "node:path";
-var STATE_DIR2 = join11(homedir9(), ".deeplake", "state", "skillify");
-var CONFIG_PATH = join11(STATE_DIR2, "config.json");
+import { join as join12 } from "node:path";
+function configPath() {
+  return join12(getStateDir(), "config.json");
+}
 var DEFAULT = { scope: "me", team: [], install: "project" };
 function loadScopeConfig() {
   migrateLegacyStateDir();
+  const CONFIG_PATH = configPath();
   if (!existsSync6(CONFIG_PATH))
     return DEFAULT;
   try {

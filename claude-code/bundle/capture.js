@@ -998,25 +998,31 @@ function spawnSkillifyWorker(opts) {
 }
 
 // dist/src/skillify/state.js
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync5, writeSync as writeSync2, mkdirSync as mkdirSync6, renameSync as renameSync3, rmSync, existsSync as existsSync6, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync5, writeSync as writeSync2, mkdirSync as mkdirSync6, renameSync as renameSync3, rmSync, existsSync as existsSync6, lstatSync, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
 import { execSync as execSync2 } from "node:child_process";
-import { homedir as homedir8 } from "node:os";
 import { createHash } from "node:crypto";
-import { join as join11, basename } from "node:path";
+import { join as join12, basename } from "node:path";
 
 // dist/src/skillify/legacy-migration.js
 import { existsSync as existsSync5, renameSync as renameSync2 } from "node:fs";
+import { dirname as dirname4, join as join11 } from "node:path";
+
+// dist/src/skillify/state-dir.js
 import { homedir as homedir7 } from "node:os";
 import { join as join10 } from "node:path";
+function getStateDir() {
+  return process.env.HIVEMIND_STATE_DIR ?? join10(homedir7(), ".deeplake", "state", "skillify");
+}
+
+// dist/src/skillify/legacy-migration.js
 var dlog2 = (msg) => log("skillify-migrate", msg);
-var attempted = false;
+var attemptedFor = /* @__PURE__ */ new Set();
 function migrateLegacyStateDir() {
-  if (attempted)
+  const current = getStateDir();
+  if (attemptedFor.has(current))
     return;
-  attempted = true;
-  const root = join10(homedir7(), ".deeplake", "state");
-  const legacy = join10(root, "skilify");
-  const current = join10(root, "skillify");
+  attemptedFor.add(current);
+  const legacy = join11(dirname4(current), "skilify");
   if (!existsSync5(legacy))
     return;
   if (existsSync5(current))
@@ -1036,19 +1042,16 @@ function migrateLegacyStateDir() {
 
 // dist/src/skillify/state.js
 var dlog3 = (msg) => log("skillify-state", msg);
-function getStateDir() {
-  return process.env.HIVEMIND_STATE_DIR ?? join11(homedir8(), ".deeplake", "state", "skillify");
-}
 var YIELD_BUF2 = new Int32Array(new SharedArrayBuffer(4));
 var TRIGGER_THRESHOLD = (() => {
   const n = Number(process.env.HIVEMIND_SKILLIFY_EVERY_N_TURNS ?? "");
   return Number.isInteger(n) && n > 0 ? n : 20;
 })();
 function statePath2(projectKey) {
-  return join11(getStateDir(), `${projectKey}.json`);
+  return join12(getStateDir(), `${projectKey}.json`);
 }
 function lockPath2(projectKey) {
-  return join11(getStateDir(), `${projectKey}.lock`);
+  return join12(getStateDir(), `${projectKey}.lock`);
 }
 var DEFAULT_PORTS = {
   http: "80",
@@ -1185,16 +1188,22 @@ function tryAcquireWorkerLock(projectKey, maxAgeMs = 10 * 60 * 1e3) {
     try {
       unlinkSync2(p);
     } catch (unlinkErr) {
-      if (unlinkErr?.code === "EISDIR") {
+      if (unlinkErr?.code !== "EISDIR") {
+        dlog3(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
+        return false;
+      }
+      let isDir = false;
+      try {
+        isDir = lstatSync(p).isDirectory();
+      } catch {
+      }
+      if (isDir) {
         try {
           rmSync(p, { recursive: true, force: true });
         } catch (rmErr) {
           dlog3(`could not remove stale dir-lock for ${projectKey}: ${rmErr.message}`);
           return false;
         }
-      } else {
-        dlog3(`could not unlink stale worker lock for ${projectKey}: ${unlinkErr.message}`);
-        return false;
       }
     }
   }
@@ -1220,13 +1229,14 @@ function releaseWorkerLock(projectKey) {
 
 // dist/src/skillify/scope-config.js
 import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync6, writeFileSync as writeFileSync6 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-import { join as join12 } from "node:path";
-var STATE_DIR2 = join12(homedir9(), ".deeplake", "state", "skillify");
-var CONFIG_PATH = join12(STATE_DIR2, "config.json");
+import { join as join13 } from "node:path";
+function configPath() {
+  return join13(getStateDir(), "config.json");
+}
 var DEFAULT = { scope: "me", team: [], install: "project" };
 function loadScopeConfig() {
   migrateLegacyStateDir();
+  const CONFIG_PATH = configPath();
   if (!existsSync7(CONFIG_PATH))
     return DEFAULT;
   try {
@@ -1284,8 +1294,8 @@ function tryStopCounterTrigger(opts) {
 import { connect } from "node:net";
 import { spawn as spawn3 } from "node:child_process";
 import { openSync as openSync4, closeSync as closeSync4, writeSync as writeSync3, unlinkSync as unlinkSync4, existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
-import { homedir as homedir13 } from "node:os";
-import { join as join16 } from "node:path";
+import { homedir as homedir11 } from "node:os";
+import { join as join17 } from "node:path";
 
 // dist/src/embeddings/protocol.js
 var DEFAULT_SOCKET_DIR = "/tmp";
@@ -1300,15 +1310,15 @@ function pidPathFor(uid, dir = DEFAULT_SOCKET_DIR) {
 
 // dist/src/notifications/queue.js
 import { readFileSync as readFileSync7, writeFileSync as writeFileSync7, renameSync as renameSync4, mkdirSync as mkdirSync8, openSync as openSync3, closeSync as closeSync3, unlinkSync as unlinkSync3, statSync } from "node:fs";
-import { join as join13, resolve } from "node:path";
-import { homedir as homedir10 } from "node:os";
+import { join as join14, resolve } from "node:path";
+import { homedir as homedir8 } from "node:os";
 import { setTimeout as sleep2 } from "node:timers/promises";
 var log3 = (msg) => log("notifications-queue", msg);
 var LOCK_RETRY_MAX = 50;
 var LOCK_RETRY_BASE_MS = 5;
 var LOCK_STALE_MS = 5e3;
 function queuePath() {
-  return join13(homedir10(), ".deeplake", "notifications-queue.json");
+  return join14(homedir8(), ".deeplake", "notifications-queue.json");
 }
 function lockPath3() {
   return `${queuePath()}.lock`;
@@ -1333,18 +1343,18 @@ function _isQueuePathInsideHome(path, home) {
 }
 function writeQueue(q) {
   const path = queuePath();
-  const home = resolve(homedir10());
+  const home = resolve(homedir8());
   if (!_isQueuePathInsideHome(path, home)) {
     throw new Error(`notifications-queue write blocked: ${path} is outside ${home}`);
   }
-  mkdirSync8(join13(home, ".deeplake"), { recursive: true, mode: 448 });
+  mkdirSync8(join14(home, ".deeplake"), { recursive: true, mode: 448 });
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync7(tmp, JSON.stringify(q, null, 2), { mode: 384 });
   renameSync4(tmp, path);
 }
 async function withQueueLock(fn) {
   const path = lockPath3();
-  mkdirSync8(join13(homedir10(), ".deeplake"), { recursive: true, mode: 448 });
+  mkdirSync8(join14(homedir8(), ".deeplake"), { recursive: true, mode: 448 });
   let fd = null;
   for (let attempt = 0; attempt < LOCK_RETRY_MAX; attempt++) {
     try {
@@ -1401,15 +1411,15 @@ async function enqueueNotification(n) {
 
 // dist/src/embeddings/disable.js
 import { createRequire as createRequire2 } from "node:module";
-import { homedir as homedir12 } from "node:os";
-import { join as join15 } from "node:path";
+import { homedir as homedir10 } from "node:os";
+import { join as join16 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // dist/src/user-config.js
 import { existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync8 } from "node:fs";
-import { homedir as homedir11 } from "node:os";
-import { dirname as dirname4, join as join14 } from "node:path";
-var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join14(homedir11(), ".deeplake", "config.json");
+import { homedir as homedir9 } from "node:os";
+import { dirname as dirname5, join as join15 } from "node:path";
+var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join15(homedir9(), ".deeplake", "config.json");
 var _cache = null;
 var _migrated = false;
 function readUserConfig() {
@@ -1433,7 +1443,7 @@ function writeUserConfig(patch) {
   const current = readUserConfig();
   const merged = deepMerge(current, patch);
   const path = _configPath();
-  const dir = dirname4(path);
+  const dir = dirname5(path);
   if (!existsSync8(dir))
     mkdirSync9(dir, { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
@@ -1487,7 +1497,7 @@ function deepMerge(base, patch) {
 // dist/src/embeddings/disable.js
 var cachedStatus = null;
 function defaultResolveTransformers() {
-  const sharedDir = join15(homedir12(), ".hivemind", "embed-deps");
+  const sharedDir = join16(homedir10(), ".hivemind", "embed-deps");
   try {
     createRequire2(pathToFileURL(`${sharedDir}/`).href).resolve("@huggingface/transformers");
     return;
@@ -1518,7 +1528,7 @@ function embeddingsDisabled() {
 }
 
 // dist/src/embeddings/client.js
-var SHARED_DAEMON_PATH = join16(homedir13(), ".hivemind", "embed-deps", "embed-daemon.js");
+var SHARED_DAEMON_PATH = join17(homedir11(), ".hivemind", "embed-deps", "embed-daemon.js");
 var log4 = (m) => log("embed-client", m);
 function getUid() {
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
@@ -1915,22 +1925,22 @@ function embeddingSqlLiteral(vec) {
 }
 
 // dist/src/embeddings/self-heal.js
-import { existsSync as existsSync10, lstatSync, mkdirSync as mkdirSync10, readlinkSync, renameSync as renameSync6, rmSync as rmSync2, symlinkSync, statSync as statSync2 } from "node:fs";
-import { homedir as homedir14 } from "node:os";
-import { basename as basename2, dirname as dirname5, join as join17 } from "node:path";
+import { existsSync as existsSync10, lstatSync as lstatSync2, mkdirSync as mkdirSync10, readlinkSync, renameSync as renameSync6, rmSync as rmSync2, symlinkSync, statSync as statSync2 } from "node:fs";
+import { homedir as homedir12 } from "node:os";
+import { basename as basename2, dirname as dirname6, join as join18 } from "node:path";
 function ensurePluginNodeModulesLink(opts) {
   if (basename2(opts.bundleDir) !== "bundle") {
     return { kind: "not-bundle-layout", bundleDir: opts.bundleDir };
   }
-  const target = opts.sharedNodeModules ?? join17(homedir14(), ".hivemind", "embed-deps", "node_modules");
-  const pluginDir = dirname5(opts.bundleDir);
-  const link = join17(pluginDir, "node_modules");
+  const target = opts.sharedNodeModules ?? join18(homedir12(), ".hivemind", "embed-deps", "node_modules");
+  const pluginDir = dirname6(opts.bundleDir);
+  const link = join18(pluginDir, "node_modules");
   if (!existsSync10(target)) {
     return { kind: "shared-deps-missing", target };
   }
   let linkStat;
   try {
-    linkStat = lstatSync(link);
+    linkStat = lstatSync2(link);
   } catch {
     return createSymlinkAtomic(target, link);
   }
@@ -1963,7 +1973,7 @@ function ensurePluginNodeModulesLink(opts) {
 }
 function createSymlinkAtomic(target, link) {
   try {
-    const parent = dirname5(link);
+    const parent = dirname6(link);
     if (!existsSync10(parent))
       mkdirSync10(parent, { recursive: true });
     const tmp = `${link}.tmp.${process.pid}`;
@@ -1981,12 +1991,12 @@ function createSymlinkAtomic(target, link) {
 
 // dist/src/hooks/capture.js
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname6, join as join18 } from "node:path";
+import { dirname as dirname7, join as join19 } from "node:path";
 var log5 = (msg) => log("capture", msg);
 function resolveEmbedDaemonPath() {
-  return join18(dirname6(fileURLToPath3(import.meta.url)), "embeddings", "embed-daemon.js");
+  return join19(dirname7(fileURLToPath3(import.meta.url)), "embeddings", "embed-daemon.js");
 }
-var __bundleDir = dirname6(fileURLToPath3(import.meta.url));
+var __bundleDir = dirname7(fileURLToPath3(import.meta.url));
 var PLUGIN_VERSION = getInstalledVersion(__bundleDir, ".claude-plugin") ?? "";
 if (!embeddingsDisabled()) {
   try {
