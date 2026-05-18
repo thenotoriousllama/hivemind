@@ -6539,13 +6539,14 @@ function renderCliHelpBlock() {
   const lines = [];
   for (const sub of SKILLIFY_SPEC) {
     const left = sub.args ? `${sub.cmd} ${sub.args}` : sub.cmd;
-    lines.push(`${INDENT}${left.padEnd(CMD_COL_WIDTH)}${capitalize(sub.desc)}.`);
+    const padded = left.length >= CMD_COL_WIDTH ? `${left}  ` : left.padEnd(CMD_COL_WIDTH);
+    lines.push(`${INDENT}${padded}${capitalize(sub.desc)}.`);
     if (sub.options && sub.options.length > 0) {
       const optsList = sub.options.map((o) => o.flag).join(", ");
       lines.push(`${INDENT}${" ".repeat(CMD_COL_WIDTH)}Options: ${optsList}.`);
     }
     if (sub.note) {
-      const noteWrapped = wrapAt(sub.note, 72);
+      const noteWrapped = wrapAt(`Note: ${sub.note}`, 72);
       for (const noteLine of noteWrapped) {
         lines.push(`${INDENT}${" ".repeat(CMD_COL_WIDTH)}${noteLine}`);
       }
@@ -6562,12 +6563,14 @@ function renderSubcommandUsageBlock() {
   const lines = [];
   for (const sub of SKILLIFY_SPEC) {
     const left = sub.args ? `${sub.cmd} ${sub.args}` : sub.cmd;
-    lines.push(`${INDENT}${left.padEnd(CMD_COL_WIDTH)}${sub.desc}`);
+    const padded = left.length >= CMD_COL_WIDTH ? `${left}  ` : left.padEnd(CMD_COL_WIDTH);
+    lines.push(`${INDENT}${padded}${sub.desc}`);
     if (sub.options && sub.options.length > 0) {
       const tail = sub.cmd.split(" ").slice(-1)[0];
       lines.push(`${SUB_INDENT}Options for ${tail}:`);
       for (const opt of sub.options) {
-        lines.push(`${FLAG_INDENT}${opt.flag.padEnd(FLAG_COL_WIDTH)}${opt.desc}`);
+        const flagPadded = opt.flag.length >= FLAG_COL_WIDTH ? `${opt.flag}  ` : opt.flag.padEnd(FLAG_COL_WIDTH);
+        lines.push(`${FLAG_INDENT}${flagPadded}${opt.desc}`);
       }
     }
   }

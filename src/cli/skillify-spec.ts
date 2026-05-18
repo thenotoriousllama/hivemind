@@ -170,13 +170,17 @@ export function renderCliHelpBlock(): string {
   const lines: string[] = [];
   for (const sub of SKILLIFY_SPEC) {
     const left = sub.args ? `${sub.cmd} ${sub.args}` : sub.cmd;
-    lines.push(`${INDENT}${left.padEnd(CMD_COL_WIDTH)}${capitalize(sub.desc)}.`);
+    // padEnd does nothing if `left` already exceeds CMD_COL_WIDTH, which
+    // glues the description onto the command. Always force at least two
+    // spaces between left and right columns so long entries stay readable.
+    const padded = left.length >= CMD_COL_WIDTH ? `${left}  ` : left.padEnd(CMD_COL_WIDTH);
+    lines.push(`${INDENT}${padded}${capitalize(sub.desc)}.`);
     if (sub.options && sub.options.length > 0) {
       const optsList = sub.options.map(o => o.flag).join(", ");
       lines.push(`${INDENT}${" ".repeat(CMD_COL_WIDTH)}Options: ${optsList}.`);
     }
     if (sub.note) {
-      const noteWrapped = wrapAt(sub.note, 72);
+      const noteWrapped = wrapAt(`Note: ${sub.note}`, 72);
       for (const noteLine of noteWrapped) {
         lines.push(`${INDENT}${" ".repeat(CMD_COL_WIDTH)}${noteLine}`);
       }
@@ -201,12 +205,17 @@ export function renderSubcommandUsageBlock(): string {
   const lines: string[] = [];
   for (const sub of SKILLIFY_SPEC) {
     const left = sub.args ? `${sub.cmd} ${sub.args}` : sub.cmd;
-    lines.push(`${INDENT}${left.padEnd(CMD_COL_WIDTH)}${sub.desc}`);
+    // Same gap-protection as in renderCliHelpBlock — long entries (e.g.
+    // "hivemind skillify team add|remove|list <name>") must still have a
+    // visible separation from their description.
+    const padded = left.length >= CMD_COL_WIDTH ? `${left}  ` : left.padEnd(CMD_COL_WIDTH);
+    lines.push(`${INDENT}${padded}${sub.desc}`);
     if (sub.options && sub.options.length > 0) {
       const tail = sub.cmd.split(" ").slice(-1)[0];
       lines.push(`${SUB_INDENT}Options for ${tail}:`);
       for (const opt of sub.options) {
-        lines.push(`${FLAG_INDENT}${opt.flag.padEnd(FLAG_COL_WIDTH)}${opt.desc}`);
+        const flagPadded = opt.flag.length >= FLAG_COL_WIDTH ? `${opt.flag}  ` : opt.flag.padEnd(FLAG_COL_WIDTH);
+        lines.push(`${FLAG_INDENT}${flagPadded}${opt.desc}`);
       }
     }
   }
