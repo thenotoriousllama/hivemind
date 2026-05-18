@@ -154,7 +154,11 @@ describe("openclaw before_agent_start (post-blocking-recall removal)", () => {
     // assertion here is conservative: the hook must NOT call query, and
     // must NOT throw, when no creds exist.
     const before = hooks.get("before_agent_start")!;
-    await expect(before({ prompt: "anything that triggered the path before" })).resolves.not.toThrow();
+    // `.resolves.not.toThrow()` is invalid when the promise resolves to
+    // `undefined` (not a function) — see CodeRabbit on #124. Switch to
+    // `.resolves.toBeUndefined()` which actually asserts the resolved
+    // value and surfaces any thrown rejection naturally.
+    await expect(before({ prompt: "anything that triggered the path before" })).resolves.toBeUndefined();
     expect(queryMock).not.toHaveBeenCalled();
   });
 });

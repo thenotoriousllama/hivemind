@@ -833,7 +833,7 @@ export default definePluginEntry({
             if (result.delta.toolsAlsoAllow) touched.push(`"hivemind" → tools.alsoAllow`);
             return { text: `✅ Added:\n  • ${touched.join("\n  • ")}\n\nOpenclaw will detect the config change and restart. On the next turn, the agent will have access to hivemind_search, hivemind_read, and hivemind_index. **Capture starts on the next turn — earlier turns are NOT backfilled.**\n\nBackup of previous config: ${result.backupPath}${skillifyHint}` };
           }
-          return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath} and add "hivemind" to BOTH the "allow" array under "plugins" AND the "alsoAllow" array under "tools".` };
+          return { text: `⚠️ Could not update allowlist: ${result.error}\n\nManual fix: open ${result.configPath}. If \`plugins.allow\` exists as a non-empty array, add "hivemind" to it. If \`tools.alsoAllow\` exists as a non-empty array, add "hivemind" to it. If either is absent or empty, leave it as-is (openclaw treats that as default-allow).` };
         },
       });
 
@@ -1183,30 +1183,33 @@ export default definePluginEntry({
     // the SKILL.md body in the system prompt directing it to call them
     // first. See issue #121 for the original report (plugins.allow gating
     // also fixed in the same PR).
-    if (config.autoRecall !== false) {
-      hook("before_agent_start", async (event: { prompt?: string }) => {
-        if (!event.prompt || event.prompt.length < 5) return;
-        try {
-          const dl = await getApi();
+    // No `config.autoRecall` gate here: the hook body no longer does any
+    // recall (CodeRabbit on #124 caught this). Both remaining paths — the
+    // login URL nudge and the post-auth welcome banner — must run for
+    // every user, including those who set autoRecall=false. Gating the
+    // whole hook registration would silently break their auth flow.
+    hook("before_agent_start", async (event: { prompt?: string }) => {
+      if (!event.prompt || event.prompt.length < 5) return;
+      try {
+        const dl = await getApi();
 
-          if (!dl && authUrl) {
-            return {
-              prependContext: `\n\nIMPORTANT: The user needs to authenticate with Hivemind. Include this link in your reply: ${authUrl}\nTell them to click it and sign in, then send another message.\n`,
-            };
-          }
-          if (!dl) return;
-
-          if (justAuthenticated) {
-            justAuthenticated = false;
-            const creds = await loadCredentials();
-            const orgName = creds?.orgName ?? creds?.orgId ?? "unknown";
-            return { prependContext: `\n\n🐝 Welcome to Hivemind!\n\nCurrent org: ${orgName}\n\nYour agents now share memory across sessions, teammates, and machines.\n\nGet started:\n1. Verify sync: spin up multiple sessions and confirm agents share context\n2. Invite a teammate: ask the agent to add them over email\n3. Switch orgs: ask the agent to list or switch your organizations\n\nOne brain for every agent on your team.\n` };
-          }
-        } catch (err) {
-          logger.error(`before_agent_start failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (!dl && authUrl) {
+          return {
+            prependContext: `\n\nIMPORTANT: The user needs to authenticate with Hivemind. Include this link in your reply: ${authUrl}\nTell them to click it and sign in, then send another message.\n`,
+          };
         }
-      });
-    }
+        if (!dl) return;
+
+        if (justAuthenticated) {
+          justAuthenticated = false;
+          const creds = await loadCredentials();
+          const orgName = creds?.orgName ?? creds?.orgId ?? "unknown";
+          return { prependContext: `\n\n🐝 Welcome to Hivemind!\n\nCurrent org: ${orgName}\n\nYour agents now share memory across sessions, teammates, and machines.\n\nGet started:\n1. Verify sync: spin up multiple sessions and confirm agents share context\n2. Invite a teammate: ask the agent to add them over email\n3. Switch orgs: ask the agent to list or switch your organizations\n\nOne brain for every agent on your team.\n` };
+        }
+      } catch (err) {
+        logger.error(`before_agent_start failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
 
     // Auto-capture: store new messages in sessions table (same format as CC capture.ts)
     if (config.autoCapture !== false) {

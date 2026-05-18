@@ -138,16 +138,43 @@ describe("/hivemind_setup", () => {
     expect(result.text).toContain("already enabled");
   });
 
-  it("handles config where alsoAllow is missing entirely", async () => {
+  it("does NOT create alsoAllow when it's missing entirely (default-allow semantics)", async () => {
+    // CodeRabbit on #124 caught this: my original code coerced an absent
+    // tools.alsoAllow to [] then patched it to ["hivemind"], flipping the
+    // user from default-allow into explicit-allowlist mode and potentially
+    // disabling tools from other plugins. Match the same explicit-only
+    // contract used for plugins.allow.
     const configPath = writeConfig({
       tools: { profile: "coding" },
     });
     const setup = await loadSetupCommand();
     const result = await setup.handler({}) as { text: string };
-    expect(result.text).toContain("Added");
+    // No change → already-set
+    expect(result.text).toContain("already enabled");
 
     const updated = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(updated.tools.alsoAllow).toEqual(["hivemind"]);
+    expect(updated.tools.alsoAllow).toBeUndefined();
+  });
+
+  it("does NOT touch alsoAllow when it's an empty array (default-allow semantics)", async () => {
+    const configPath = writeConfig({
+      tools: { profile: "coding", alsoAllow: [] },
+    });
+    const setup = await loadSetupCommand();
+    const result = await setup.handler({}) as { text: string };
+    expect(result.text).toContain("already enabled");
+
+    const updated = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(updated.tools.alsoAllow).toEqual([]);
+  });
+
+  it("reports a parse error when openclaw.json is not valid JSON", async () => {
+    const dir = join(TEMP_HOME, ".openclaw");
+    require("node:fs").mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "openclaw.json"), "{ broken json");
+    const setup = await loadSetupCommand();
+    const result = await setup.handler({}) as { text: string };
+    expect(result.text).toContain("Could not update allowlist");
   });
 
   it("reports error when openclaw.json doesn't exist", async () => {

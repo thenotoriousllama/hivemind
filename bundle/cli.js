@@ -530,12 +530,15 @@ function ensureHivemindAllowlisted() {
   } catch (e) {
     return { status: "error", configPath, error: `could not read/parse config: ${e instanceof Error ? e.message : String(e)}` };
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "error", configPath, error: "openclaw config is not a JSON object" };
+  }
   const plugins = parsed.plugins ?? {};
   const pluginsAllowRaw = plugins.allow;
   const tools = parsed.tools ?? {};
-  const alsoAllowRaw = Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
+  const alsoAllowRaw = tools.alsoAllow;
   const pluginsAllowNeedsPatch = isPluginsAllowMissingHivemind(pluginsAllowRaw);
-  const toolsAlsoAllowNeedsPatch = !isAllowlistCoveringHivemind(alsoAllowRaw);
+  const toolsAlsoAllowNeedsPatch = Array.isArray(alsoAllowRaw) && alsoAllowRaw.length > 0 && !isAllowlistCoveringHivemind(alsoAllowRaw);
   if (!pluginsAllowNeedsPatch && !toolsAlsoAllowNeedsPatch) {
     return { status: "already-set", configPath };
   }
@@ -550,6 +553,7 @@ function ensureHivemindAllowlisted() {
   if (toolsAlsoAllowNeedsPatch) {
     updated.tools = {
       ...tools,
+      // Cast safe — the needs-patch check above guarantees Array.
       alsoAllow: [...alsoAllowRaw, "hivemind"]
     };
   }
@@ -606,6 +610,12 @@ function installOpenclaw() {
     log(`  OpenClaw       capture starts on the NEXT turn \u2014 earlier turns are NOT backfilled`);
   } else if (result.status === "already-set") {
     log(`  OpenClaw       allowlist already covers hivemind in ${result.configPath}`);
+  } else if (result.status === "error") {
+    if (result.error === "openclaw config file not found") {
+      log(`  OpenClaw       openclaw.json not present at ${result.configPath} \u2014 run openclaw once, then \`hivemind claw install\` again`);
+    } else {
+      warn(`  OpenClaw       could not patch allowlist in ${result.configPath}: ${result.error}`);
+    }
   }
 }
 function uninstallOpenclaw() {

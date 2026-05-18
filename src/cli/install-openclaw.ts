@@ -1,6 +1,6 @@
 import { existsSync, copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { HOME, pkgRoot, ensureDir, copyDir, writeVersionStamp, log } from "./util.js";
+import { HOME, pkgRoot, ensureDir, copyDir, writeVersionStamp, log, warn } from "./util.js";
 import { getVersion } from "./version.js";
 import { ensureHivemindAllowlisted } from "../../openclaw/src/setup-config.js";
 
@@ -64,10 +64,19 @@ export function installOpenclaw(): void {
     log(`  OpenClaw       capture starts on the NEXT turn — earlier turns are NOT backfilled`);
   } else if (result.status === "already-set") {
     log(`  OpenClaw       allowlist already covers hivemind in ${result.configPath}`);
+  } else if (result.status === "error") {
+    // "openclaw config file not found" is the common no-op case (gateway
+    // never started). Log it at info-level — installer is non-fatal, the
+    // /hivemind_setup slash command will patch on first openclaw run.
+    // Other errors (malformed JSON, write failure) are user-actionable
+    // and get a warn so they're visible. CodeRabbit on #124 caught the
+    // previous silent-error path.
+    if (result.error === "openclaw config file not found") {
+      log(`  OpenClaw       openclaw.json not present at ${result.configPath} — run openclaw once, then \`hivemind claw install\` again`);
+    } else {
+      warn(`  OpenClaw       could not patch allowlist in ${result.configPath}: ${result.error}`);
+    }
   }
-  // status === "error" (config missing / malformed): stay quiet. Most
-  // common cause is "openclaw not run yet" — not actionable here, and
-  // /hivemind_setup will fix it the first time the user runs openclaw.
 }
 
 export function uninstallOpenclaw(): void {

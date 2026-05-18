@@ -72,14 +72,25 @@ export function ensureHivemindAllowlisted(): SetupResult {
   } catch (e) {
     return { status: "error", configPath, error: `could not read/parse config: ${e instanceof Error ? e.message : String(e)}` };
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "error", configPath, error: "openclaw config is not a JSON object" };
+  }
 
   const plugins = (parsed.plugins ?? {}) as Record<string, unknown>;
   const pluginsAllowRaw = plugins.allow;
   const tools = (parsed.tools ?? {}) as Record<string, unknown>;
-  const alsoAllowRaw = Array.isArray(tools.alsoAllow) ? (tools.alsoAllow as unknown[]) : [];
+  const alsoAllowRaw = tools.alsoAllow;
 
   const pluginsAllowNeedsPatch = isPluginsAllowMissingHivemind(pluginsAllowRaw);
-  const toolsAlsoAllowNeedsPatch = !isAllowlistCoveringHivemind(alsoAllowRaw);
+  // Match the same explicit-non-empty-only contract used for plugins.allow:
+  // only patch when the user has opted into an explicit array. Absent or
+  // empty → leave alone, so we don't flip default-allow setups into
+  // restrictive explicit-allowlist mode (CodeRabbit on #124). The
+  // reporter's broken-state config in #121 already had this as an
+  // explicit array, so the original bug-fix path is unchanged.
+  const toolsAlsoAllowNeedsPatch =
+    Array.isArray(alsoAllowRaw) && alsoAllowRaw.length > 0 &&
+    !isAllowlistCoveringHivemind(alsoAllowRaw);
 
   if (!pluginsAllowNeedsPatch && !toolsAlsoAllowNeedsPatch) {
     return { status: "already-set", configPath };
@@ -98,7 +109,8 @@ export function ensureHivemindAllowlisted(): SetupResult {
   if (toolsAlsoAllowNeedsPatch) {
     updated.tools = {
       ...tools,
-      alsoAllow: [...alsoAllowRaw, "hivemind"],
+      // Cast safe — the needs-patch check above guarantees Array.
+      alsoAllow: [...(alsoAllowRaw as unknown[]), "hivemind"],
     };
   }
 
@@ -193,9 +205,17 @@ export function detectAllowlistMissing(): boolean {
   if (!existsSync(configPath)) return false;
   try {
     const parsed = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
     const plugins = (parsed.plugins ?? {}) as Record<string, unknown>;
     const tools = (parsed.tools ?? {}) as Record<string, unknown>;
-    return isPluginsAllowMissingHivemind(plugins.allow) || !isAllowlistCoveringHivemind(tools.alsoAllow);
+    const alsoAllow = tools.alsoAllow;
+    // Same explicit-non-empty-only contract as `ensureHivemindAllowlisted`:
+    // an absent/empty `tools.alsoAllow` is default-allow, not "missing
+    // hivemind" — so don't trigger the nudge for those users.
+    const toolsMissing =
+      Array.isArray(alsoAllow) && alsoAllow.length > 0 &&
+      !isAllowlistCoveringHivemind(alsoAllow);
+    return isPluginsAllowMissingHivemind(plugins.allow) || toolsMissing;
   } catch {
     return false;
   }
