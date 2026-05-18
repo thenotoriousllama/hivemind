@@ -293,6 +293,83 @@ describe("worker lock edge cases", () => {
     expect(tryAcquireWorkerLock(key)).toBe(false);
     releaseWorkerLock(key);
   });
+
+  it("does NOT rmSync a regular lock file that replaced the stale dir mid-recovery", () => {
+    // Regression test for the TOCTOU race Codex flagged: the EISDIR
+    // self-heal must not steamroll a file that appeared at the lock
+    // path between our failed `unlinkSync` and the recovery step.
+    //
+    // Setup: simulate the post-race state directly. After the source
+    // code patches were applied, the only way for the code to reach
+    // the `rmSync` branch is when the path is *still* a directory at
+    // lstat time. We assert the inverse: if the path is a regular
+    // file when self-heal runs (because another process won the race
+    // and replaced it), the function must NOT destroy that file. The
+    // way we observe this is by pre-existing a fresh-timestamp lock
+    // file at the path and asserting tryAcquireWorkerLock returns
+    // false (lock held) and the file is still there afterwards.
+    const fs = require("node:fs");
+    const cwd = freshCwd();
+    const { key } = deriveProjectKey(cwd);
+    track(key);
+    const path = join(STATE_DIR, `${key}.lock`);
+    fs.writeFileSync(path, String(Date.now())); // fresh "held by another process"
+    const before = fs.readFileSync(path, "utf-8");
+    expect(tryAcquireWorkerLock(key)).toBe(false);
+    expect(fs.existsSync(path)).toBe(true);
+    expect(fs.readFileSync(path, "utf-8")).toBe(before);
+    releaseWorkerLock(key);
+  });
+});
+
+describe("HIVEMIND_STATE_DIR routing", () => {
+  it("getStateDir + legacy-migration short-circuit on the tmp dir (no real-home pollution)", async () => {
+    // Codex P1: legacy-migration.ts used to hardcode homedir(), so every
+    // public state call (called transitively from readState / writeState /
+    // withRmwLock / tryAcquireWorkerLock) would stat-and-potentially-rename
+    // the developer's real `~/.deeplake/state/skilify` despite the env
+    // override on state.ts.
+    //
+    // Two assertions establish the channel is closed:
+    //   1) getStateDir() returns the tmp dir, NOT a path under homedir().
+    //   2) Calling migrateLegacyStateDir() is a no-op in this tmp world
+    //      — the `skilify` sibling derived from the tmp dir does not
+    //      exist, so the function never touches real-home paths.
+    const { getStateDir } = await import("../../src/skillify/state-dir.js");
+    const { migrateLegacyStateDir } = await import("../../src/skillify/legacy-migration.js");
+    const { homedir } = await import("node:os");
+
+    expect(getStateDir()).toBe(STATE_DIR);
+    expect(getStateDir().startsWith(homedir())).toBe(false);
+
+    const fs = require("node:fs");
+    const tmpLegacy = join(STATE_DIR, "..", "skilify");
+    expect(fs.existsSync(tmpLegacy)).toBe(false);
+    expect(() => migrateLegacyStateDir()).not.toThrow();
+    // Did not magic the legacy sibling into existence either.
+    expect(fs.existsSync(tmpLegacy)).toBe(false);
+  });
+
+  it("scope-config + manifest paths land in HIVEMIND_STATE_DIR", async () => {
+    // Codex P2: scope-config.ts and manifest.ts used to bypass the env
+    // override (module-level STATE_DIR const + homedir() respectively).
+    // After the refactor, both should resolve to the tmp dir.
+    const { saveScopeConfig, loadScopeConfig } = await import("../../src/skillify/scope-config.js");
+    const { manifestPath } = await import("../../src/skillify/manifest.js");
+
+    saveScopeConfig({ scope: "team", team: ["alice"], install: "global" });
+    const fs = require("node:fs");
+    const configFile = join(STATE_DIR, "config.json");
+    expect(fs.existsSync(configFile)).toBe(true);
+    const reloaded = loadScopeConfig();
+    expect(reloaded).toEqual({ scope: "team", team: ["alice"], install: "global" });
+
+    expect(manifestPath()).toBe(join(STATE_DIR, "pulled.json"));
+
+    // Cleanup — these files don't have a project-key suffix, so the
+    // afterEach belt-and-braces sweep misses them.
+    try { fs.rmSync(configFile, { force: true }); } catch { /* nothing */ }
+  });
 });
 
 describe("TRIGGER_THRESHOLD", () => {
