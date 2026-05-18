@@ -228,10 +228,19 @@ function trySpawnDaemon(daemonEntry: string, pidPath: string): boolean {
  * if it's still ours — never touch a PID written by the daemon itself
  * (it might be in the middle of binding) or by another caller that
  * raced past us.
+ *
+ * Also cleans up an empty pidfile. If a previous caller was SIGKILL'd
+ * exactly between `openSync(wx)` and `writeSync(pid)` (codex's residual
+ * non-blocking edge), the empty file persists and every subsequent
+ * caller treats it as "writer in progress" — silent NULL embeddings
+ * for that uid forever. By the time we hit this cleanup we've already
+ * waited spawnWaitMs (5s), which is many orders of magnitude longer
+ * than the legitimate sub-microsecond openSync→writeSync gap, so
+ * "empty here" must mean the writer died, not "writer is in progress".
  */
 function maybeCleanupOwnPlaceholder(pidPath: string): void {
   const existing = readPidFile(pidPath);
-  if (existing === process.pid) {
+  if (existing === process.pid || existing === "empty") {
     try { unlinkSync(pidPath); } catch { /* already gone */ }
   }
 }

@@ -465,7 +465,7 @@ describe("tryEmbedStandalone", () => {
   // as stale + respawned. Before the fix, the catch-block in
   // trySpawnDaemon called readPidFile → Number("") === 0 → null → "stale"
   // → unlink + retry openSync. Two callers could both end up spawning.
-  it("treats an empty pidfile as 'writer in progress' and does not respawn", async () => {
+  it("does not respawn when a concurrent caller's pidfile is still empty", async () => {
     const dir = makeTmpDir();
     const { pid: pidPath } = pathsFor(dir);
     writeFileSync(pidPath, ""); // brand-new empty pidfile (the race window)
@@ -485,10 +485,9 @@ describe("tryEmbedStandalone", () => {
 
     expect(vec).toBeNull();
     // Critical: zero spawns because we deferred to the (presumed) winner.
+    // The post-timeout cleanup of the empty pidfile is covered by the
+    // separate "clears a stuck empty pidfile" test below.
     expect(spawnCalls).toBe(0);
-    // The empty pidfile is left untouched — clearing it would race with
-    // the supposed winner's pending writeSync(pid).
-    expect(existsSync(pidPath)).toBe(true);
   });
 
   // Codex P1 #2 — if we spawned and the daemon never opened the socket,
@@ -526,6 +525,43 @@ describe("tryEmbedStandalone", () => {
     // Without the cleanup, this stays at 1 (next caller saw a live owner).
     // With the fix, the retry actually spawns.
     expect(spawnCalls).toBe(2);
+  });
+
+  // Codex residual edge — empty pidfile from a SIGKILL'd previous caller
+  // would otherwise lock the uid into NULL embeddings forever. After the
+  // spawnWaitMs timeout (5s — orders of magnitude longer than the
+  // legitimate openSync→writeSync gap), cleanup MUST drop the empty
+  // file so the next call can recover.
+  it("clears a stuck empty pidfile after waitForSocket times out", async () => {
+    const dir = makeTmpDir();
+    const { pid: pidPath } = pathsFor(dir);
+    writeFileSync(pidPath, ""); // simulate SIGKILL'd writer between wx and writeSync
+    const fakeEntry = join(dir, "daemon-marker.js");
+    writeFileSync(fakeEntry, "");
+
+    let spawnCalls = 0;
+    _setSpawnImpl(() => { spawnCalls += 1; return makeFakeChild(); });
+
+    // First call: sees empty → waits → times out → cleans up.
+    const first = await tryEmbedStandalone("x", "document", {
+      socketDir: dir,
+      daemonEntry: fakeEntry,
+      requestTimeoutMs: 30,
+      spawnWaitMs: 150,
+    });
+    expect(first).toBeNull();
+    expect(spawnCalls).toBe(0); // we didn't spawn — deferred to the (dead) writer
+    expect(existsSync(pidPath)).toBe(false); // empty pidfile cleaned
+
+    // Second call: pidfile is gone, we spawn for real.
+    const second = await tryEmbedStandalone("x", "document", {
+      socketDir: dir,
+      daemonEntry: fakeEntry,
+      requestTimeoutMs: 30,
+      spawnWaitMs: 150,
+    });
+    expect(second).toBeNull();
+    expect(spawnCalls).toBe(1);
   });
 
   // Codex P2 — daemon-side payload is JSON-over-socket; even though our

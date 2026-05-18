@@ -267,9 +267,15 @@ function trySpawnDaemonInline(): boolean {
 // pi turn would see "live owner" (we're still running) and wait forever
 // instead of retrying the spawn. Clean up the placeholder, but only if
 // it's still ours — the daemon may have already overwritten it.
+//
+// Also clears an empty pidfile (codex's residual edge): if a prior pi
+// turn was SIGKILL'd between openSync(wx) and writeSync(pid), the empty
+// file would persist and every later turn would wait forever. By the
+// time we hit this cleanup we've waited 5s — orders of magnitude longer
+// than the legitimate openSync→writeSync gap.
 function maybeCleanupOwnPlaceholderInline(): void {
   const existing = readPidFileInline(EMBED_PID_PATH);
-  if (existing === process.pid) {
+  if (existing === process.pid || existing === "empty") {
     try { unlinkSync(EMBED_PID_PATH); } catch { /* already gone */ }
   }
 }
