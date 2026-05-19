@@ -26,6 +26,13 @@ export default defineConfig({
       "tests/hermes/**/*.test.ts",
       "tests/openclaw/**/*.test.ts",
       "tests/pi/**/*.test.ts",
+      // Non-agent-specific tests for shared `src/` modules (auth,
+      // deeplake-api, embeddings, grep, notifications, etc.). New
+      // location since PR #183 — the older convention dumps everything
+      // shared into tests/claude-code/, which misleadingly suggests
+      // agent scope. New tests for src/* modules go here; a follow-up
+      // issue tracks the migration of the existing ones.
+      "tests/shared/**/*.test.ts",
     ],
     setupFiles: ["./tests/test-setup.ts"],
     environment: "node",
@@ -146,6 +153,18 @@ export default defineConfig({
         "src/embeddings/sql.ts": {
           statements: 90,
           branches: 90,
+          functions: 90,
+          lines: 90,
+        },
+        // PR for issue #178 — standalone embed client used by pi + openclaw.
+        // Stripped-down spawn-on-miss state machine. Same branch tier as
+        // `client.ts`: a couple of paths (cross-process race on pidfile
+        // cleanup, getUid fallback for non-Unix runtimes) are intentionally
+        // v8-ignored because they can't be triggered deterministically from
+        // unit tests without forking real subprocesses.
+        "src/embeddings/standalone-embed-client.ts": {
+          statements: 90,
+          branches: 80,
           functions: 90,
           lines: 90,
         },
