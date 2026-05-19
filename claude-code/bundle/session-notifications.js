@@ -461,20 +461,12 @@ function countUserGeneratedSkills(userName) {
   }
 }
 
-// dist/src/notifications/sources/local-usage.js
-var log7 = (msg) => log("notifications-local-usage", msg);
+// dist/src/notifications/sources/primary-banner.js
+var log7 = (msg) => log("notifications-primary-banner", msg);
 var BYTES_PER_TOKEN = 4;
 var SAVINGS_MULTIPLIER = 1.7;
-var MIN_PERSONAL_RECALLS = 5;
-function minLocalRecordsForRecap() {
-  const raw = process.env.HIVEMIND_NOTIFICATIONS_MIN_SESSIONS;
-  if (typeof raw === "string" && raw.length > 0) {
-    const n = Number(raw);
-    if (Number.isInteger(n) && n >= 0)
-      return n;
-  }
-  return 20;
-}
+var MEANINGFUL_SAVINGS_TOKENS = 1e6;
+var MIN_USER_BYTES_FOR_CONTRIBUTION_LINE = 4e3;
 function formatTokens(n) {
   if (!Number.isFinite(n) || n <= 0)
     return "0";
@@ -493,69 +485,71 @@ function bytesToSavedTokens(bytes) {
   const y = bytes / BYTES_PER_TOKEN;
   return (SAVINGS_MULTIPLIER - 1) * y;
 }
-async function fetchLocalUsageNotifications(sessionId, creds) {
-  if (!sessionId) {
-    return [];
+function localSavedTokens() {
+  try {
+    const records = readUsageRecords();
+    if (records.length === 0)
+      return 0;
+    const bytes = sumMetric(records, "memorySearchBytes");
+    return bytesToSavedTokens(bytes);
+  } catch (e) {
+    log7(`localSavedTokens threw: ${e?.message ?? String(e)}`);
+    return 0;
   }
-  const userName = creds?.userName;
-  const orgStats = await fetchOrgStats(creds ?? null);
-  if (orgStats && orgStats.user.memoryRecallCount >= MIN_PERSONAL_RECALLS) {
-    return renderOnlineRecap(sessionId, orgStats, userName);
-  }
-  if (orgStats) {
-    log7(`server stats present but personal recalls ${orgStats.user.memoryRecallCount} < ${MIN_PERSONAL_RECALLS} \u2014 falling through to local`);
-  }
-  return renderOfflineRecap(sessionId, userName);
 }
-function renderOnlineRecap(sessionId, s, userName) {
+async function pickPrimaryBanner(sessionId, creds) {
+  if (!sessionId) {
+    return null;
+  }
+  if (!creds?.token) {
+    return null;
+  }
+  const orgStats = await fetchOrgStats(creds ?? null);
+  const tokensSaved = orgStats != null ? bytesToSavedTokens(orgStats.org.memorySearchBytes) : localSavedTokens();
+  if (tokensSaved > MEANINGFUL_SAVINGS_TOKENS) {
+    return orgStats != null ? renderOnlineSavings(sessionId, orgStats, creds.userName) : renderOfflineSavings(sessionId, creds.userName);
+  }
+  return renderWelcome(sessionId, creds);
+}
+function renderWelcome(sessionId, creds) {
+  const title = creds.userName ? `Welcome back, ${creds.userName}` : "Welcome back";
+  const orgPhrase = creds.orgName ? `org ${creds.orgName}` : "your organization";
+  const workspace = creds.workspaceId ?? "default";
+  return {
+    id: "welcome",
+    severity: "info",
+    title,
+    body: `Connected to ${orgPhrase} (workspace ${workspace}).`,
+    dedupKey: { session: sessionId }
+  };
+}
+function renderOnlineSavings(sessionId, s, userName) {
   const zOrg = bytesToSavedTokens(s.org.memorySearchBytes);
   const zUser = bytesToSavedTokens(s.user.memorySearchBytes);
   const title = `Hivemind has saved your team ~${formatTokens(zOrg)} tokens`;
   const segments = [
     `${formatCount(s.org.memoryRecallCount)} memory ${s.org.memoryRecallCount === 1 ? "recall" : "recalls"}`,
-    `across ${formatCount(s.org.sessionsCount)} ${s.org.sessionsCount === 1 ? "session" : "sessions"}`,
-    `you contributed ~${formatTokens(zUser)} saved`
+    `across ${formatCount(s.org.sessionsCount)} ${s.org.sessionsCount === 1 ? "session" : "sessions"}`
   ];
+  if (s.user.memorySearchBytes >= MIN_USER_BYTES_FOR_CONTRIBUTION_LINE) {
+    segments.push(`you contributed ~${formatTokens(zUser)}`);
+  }
   const skillsGenerated = countUserGeneratedSkills(userName);
   if (skillsGenerated > 0) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
   const body = `   ${segments.join(" \xB7 ")}`;
-  return [
-    {
-      id: "local-usage:savings-recap",
-      severity: "info",
-      title,
-      body,
-      // Bump dedupKey shape so a switch from offline → online (or vice
-      // versa) on the same session doesn't suppress the new mode's
-      // emission via stale state from the prior session.
-      dedupKey: { session: sessionId, mode: "online" }
-    }
-  ];
+  return {
+    id: "savings-recap",
+    severity: "info",
+    title,
+    body,
+    dedupKey: { session: sessionId }
+  };
 }
-function renderOfflineRecap(sessionId, userName) {
-  let records;
-  try {
-    records = readUsageRecords();
-  } catch (e) {
-    log7(`readUsageRecords threw: ${e?.message ?? String(e)}`);
-    return [];
-  }
-  if (records.length === 0) {
-    log7("no usage records yet \u2014 skipping recap");
-    return [];
-  }
-  const minRecords = minLocalRecordsForRecap();
-  if (records.length < minRecords) {
-    log7(`only ${records.length} records, threshold is ${minRecords} \u2014 skipping recap`);
-    return [];
-  }
+function renderOfflineSavings(sessionId, userName) {
+  const records = readUsageRecords();
   const memorySearchBytes = sumMetric(records, "memorySearchBytes");
-  if (memorySearchBytes <= 0) {
-    log7("memorySearchBytes total is 0 \u2014 skipping recap");
-    return [];
-  }
   const zTokens = bytesToSavedTokens(memorySearchBytes);
   const sessionCount = records.length;
   const memorySearches = sumMetric(records, "memorySearchCount");
@@ -569,15 +563,13 @@ function renderOfflineRecap(sessionId, userName) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
   const body = `   ${segments.join(" \xB7 ")}`;
-  return [
-    {
-      id: "local-usage:savings-recap",
-      severity: "info",
-      title,
-      body,
-      dedupKey: { session: sessionId, mode: "offline" }
-    }
-  ];
+  return {
+    id: "savings-recap",
+    severity: "info",
+    title,
+    body,
+    dedupKey: { session: sessionId }
+  };
 }
 
 // dist/src/notifications/index.js
@@ -594,15 +586,12 @@ async function drainSessionStart(opts) {
     };
     const fromRules = evaluateRules("session_start", ctx);
     const fromQueue = queue.queue;
-    const [fromBackend, fromLocalUsage] = await Promise.all([
+    const [fromBackend, primary] = await Promise.all([
       fetchBackendNotifications(opts.creds),
-      // Local-usage source: tries GET /me/hivemind-stats first for the
-      // cross-machine "your team saved X" banner, falls back to local
-      // ~/.deeplake/usage-stats.jsonl if the server is unreachable or
-      // the caller hasn't met the personal-recall threshold.
-      fetchLocalUsageNotifications(opts.sessionId, opts.creds)
+      pickPrimaryBanner(opts.sessionId, opts.creds)
     ]);
-    const all = [...fromRules, ...fromQueue, ...fromBackend, ...fromLocalUsage];
+    const fromPrimary = primary != null ? [primary] : [];
+    const all = [...fromRules, ...fromQueue, ...fromBackend, ...fromPrimary];
     const fresh = all.filter((n) => !alreadyShown(state, n));
     if (fresh.length === 0) {
       if (queue.queue.length > 0)
@@ -630,26 +619,6 @@ async function drainSessionStart(opts) {
   }
 }
 
-// dist/src/notifications/rules/welcome.js
-var welcomeRule = {
-  id: "welcome",
-  trigger: "session_start",
-  evaluate({ creds }) {
-    if (!creds?.token)
-      return null;
-    const title = creds.userName ? `Welcome back, ${creds.userName}` : "Welcome back";
-    const orgPhrase = creds.orgName ? `org ${creds.orgName}` : "your organization";
-    const workspace = creds.workspaceId ?? "default";
-    return {
-      id: "welcome",
-      severity: "info",
-      title,
-      body: `Connected to ${orgPhrase} (workspace ${workspace}).`,
-      dedupKey: { savedAt: creds.savedAt }
-    };
-  }
-};
-
 // dist/src/notifications/rules/local-mined.js
 var localMinedRule = {
   id: "local-mined-surfaced",
@@ -671,16 +640,16 @@ var localMinedRule = {
 };
 
 // dist/src/skillify/local-manifest.js
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { dirname as dirname2, join as join6 } from "node:path";
-var LOCAL_MANIFEST_PATH = join6(homedir6(), ".claude", "hivemind", "local-mined.json");
-var LOCAL_MINE_LOCK_PATH = join6(homedir6(), ".claude", "hivemind", "local-mined.lock");
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname as dirname3, join as join7 } from "node:path";
+var LOCAL_MANIFEST_PATH = join7(homedir7(), ".claude", "hivemind", "local-mined.json");
+var LOCAL_MINE_LOCK_PATH = join7(homedir7(), ".claude", "hivemind", "local-mined.lock");
 function readLocalManifest(path = LOCAL_MANIFEST_PATH) {
-  if (!existsSync2(path))
+  if (!existsSync3(path))
     return null;
   try {
-    return JSON.parse(readFileSync5(path, "utf-8"));
+    return JSON.parse(readFileSync6(path, "utf-8"));
   } catch {
     return null;
   }
@@ -692,7 +661,6 @@ function countLocalManifestEntries(path = LOCAL_MANIFEST_PATH) {
 
 // dist/src/hooks/session-notifications.js
 var log9 = (msg) => log("session-notifications", msg);
-registerRule(welcomeRule);
 registerRule(localMinedRule);
 async function main() {
   if (process.env.HIVEMIND_WIKI_WORKER === "1")
