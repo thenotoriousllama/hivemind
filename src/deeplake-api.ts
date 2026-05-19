@@ -3,6 +3,7 @@ import { log as _log } from "./utils/debug.js";
 import { sqlStr, sqlIdent } from "./utils/sql.js";
 import { SUMMARY_EMBEDDING_COL, MESSAGE_EMBEDDING_COL } from "./embeddings/columns.js";
 import { deeplakeClientHeader } from "./utils/client-header.js";
+import { enqueueNotification } from "./notifications/queue.js";
 
 // index-marker-store touches node:fs. Load it lazily so bundlers that split
 // chunks (e.g. the openclaw plugin build) can put fs operations in a separate
@@ -33,6 +34,45 @@ function traceSql(msg: string): void {
   if (!traceEnabled) return;
   process.stderr.write(`[deeplake-sql] ${msg}\n`);
   if (process.env.HIVEMIND_DEBUG === "1") log(msg);
+}
+
+// Process-local flag so the balance-exhausted notification is enqueued at
+// most once per process. Cross-process dedup (so dozens of concurrent hook
+// processes don't pile up duplicate queue entries) is handled by
+// queue.ts's sameDedupKey check.
+let _signalledBalanceExhausted = false;
+
+/**
+ * If the response is the server's "out of credits" 402
+ * (`{"balance_cents":0,"error":"insufficient balance, please top up"}`),
+ * enqueue a session-start banner so the user actually finds out. Without
+ * this, captures and memory recalls fail silently — the agent reads empty
+ * memory and confidently reasons from no data, never telling the user
+ * why. See logs at ~/.deeplake/hook-debug.log when HIVEMIND_DEBUG=1.
+ *
+ * Fire-and-forget — the caller's existing throw path is unchanged so any
+ * upstream `try/catch` keeps working. Process-local dedup prevents
+ * re-enqueueing on every retry within the same hook process.
+ *
+ * DedupKey carries the UTC date so the banner re-fires daily until the
+ * user tops up, rather than firing once-ever and then going quiet.
+ */
+function maybeSignalBalanceExhausted(status: number, bodyText: string): void {
+  if (status !== 402) return;
+  if (!bodyText.includes("balance_cents")) return;
+  if (_signalledBalanceExhausted) return;
+  _signalledBalanceExhausted = true;
+  log(`balance exhausted — enqueuing session-start banner (body=${bodyText.slice(0, 120)})`);
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  enqueueNotification({
+    id: "balance-exhausted",
+    severity: "warn",
+    title: "Hivemind credits exhausted — top up to keep capturing",
+    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    dedupKey: { reason: "balance-zero", date },
+  }).catch((e: unknown) => {
+    log(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
+  });
 }
 
 // ── Retry & concurrency primitives ──────────────────────────────────────────
@@ -202,6 +242,9 @@ export class DeeplakeApi {
         await sleep(delay);
         continue;
       }
+      // Surface a session-start banner for the "out of credits" case before
+      // throwing — see maybeSignalBalanceExhausted's docstring for why.
+      maybeSignalBalanceExhausted(resp.status, text);
       throw new Error(`Query failed: ${resp.status}: ${text.slice(0, 200)}`);
     }
     throw lastError ?? new Error("Query failed: max retries exceeded");
@@ -575,3 +618,11 @@ export class DeeplakeApi {
     await this.ensureLookupIndex(safe, "project_key_name", `("project_key", "name")`);
   }
 }
+
+// ── Test helpers ────────────────────────────────────────────────────────────
+
+/** Reset module-local flags so tests start clean. Not for production use. */
+export function _resetSdkStateForTesting(): void {
+  _signalledBalanceExhausted = false;
+}
+
