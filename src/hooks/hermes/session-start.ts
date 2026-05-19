@@ -49,7 +49,14 @@ Organization management — each argument is SEPARATE (do NOT quote subcommands 
 - hivemind remove <user-id>                   — remove member
 
 SKILLS (skillify) — mine + share reusable skills across the org:
-${renderSkillifyCommands()}`;
+${renderSkillifyCommands()}
+
+Embeddings (semantic memory search) — opt-in, persisted in ~/.deeplake/config.json:
+- hivemind embeddings install               — download deps (~600MB), symlink agents, set enabled:true
+- hivemind embeddings enable                — flip enabled:true (run install first if deps missing)
+- hivemind embeddings disable               — flip enabled:false + SIGTERM daemon (deps stay on disk)
+- hivemind embeddings uninstall [--prune]   — remove agent symlinks + disable; --prune wipes deps too
+- hivemind embeddings status                — show config + deps + per-agent link state`;
 
 interface HermesSessionStartInput {
   hook_event_name?: string;

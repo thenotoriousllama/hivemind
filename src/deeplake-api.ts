@@ -10,6 +10,8 @@ import {
   buildCreateTableSql,
   healMissingColumns,
 } from "./deeplake-schema.js";
+import { enqueueNotification } from "./notifications/queue.js";
+import { loadCredentials } from "./commands/auth-creds.js";
 
 // index-marker-store touches node:fs. Load it lazily so bundlers that split
 // chunks (e.g. the openclaw plugin build) can put fs operations in a separate
@@ -42,13 +44,86 @@ function traceSql(msg: string): void {
   if (process.env.HIVEMIND_DEBUG === "1") log(msg);
 }
 
+// Process-local flag so the balance-exhausted notification is enqueued at
+// most once per process. Cross-process dedup (so dozens of concurrent hook
+// processes don't pile up duplicate queue entries) is handled by
+// queue.ts's sameDedupKey check.
+let _signalledBalanceExhausted = false;
+
+/**
+ * If the response is the server's "out of credits" 402
+ * (`{"balance_cents":0,"error":"insufficient balance, please top up"}`),
+ * enqueue a session-start banner so the user actually finds out. Without
+ * this, captures and memory recalls fail silently — the agent reads empty
+ * memory and confidently reasons from no data, never telling the user
+ * why. See logs at ~/.deeplake/hook-debug.log when HIVEMIND_DEBUG=1.
+ *
+ * Fire-and-forget — the caller's existing throw path is unchanged so any
+ * upstream `try/catch` keeps working. Process-local dedup prevents
+ * re-enqueueing on every retry within the same hook process.
+ *
+ * DedupKey carries the UTC date so the banner re-fires daily until the
+ * user tops up, rather than firing once-ever and then going quiet.
+ */
+function maybeSignalBalanceExhausted(status: number, bodyText: string): void {
+  if (status !== 402) return;
+  if (!bodyText.includes("balance_cents")) return;
+  if (_signalledBalanceExhausted) return;
+  _signalledBalanceExhausted = true;
+  log(`balance exhausted — enqueuing session-start banner (body=${bodyText.slice(0, 120)})`);
+  // transient: true → the drain shows it but doesn't record in state.shown.
+  // The enqueue path is itself the rate limit: only fires on a real 402,
+  // so once balance is restored no fresh enqueue happens and the banner
+  // silences naturally. dedupKey is stable so concurrent hook processes
+  // within one session collapse to one queue entry.
+  enqueueNotification({
+    id: "balance-exhausted",
+    severity: "warn",
+    transient: true,
+    title: "Hivemind credits exhausted — top up to keep capturing",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
+    dedupKey: { reason: "balance-zero" },
+  }).catch((e: unknown) => {
+    log(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
+  });
+}
+
+/**
+ * Construct the org-scoped billing URL from persisted credentials. The
+ * canonical shape is `https://deeplake.ai/{orgName}/workspace/{workspaceId}/billing`
+ * — the org and workspace come from `~/.deeplake/credentials.json`. Falls
+ * back to the bare host when creds are missing or malformed (better to
+ * point at *something* than at a URL with literal `undefined` segments).
+ */
+function billingUrl(): string {
+  try {
+    const c = loadCredentials();
+    if (c?.orgName && c?.workspaceId) {
+      // URI-encode in case anyone has an org/workspace name with reserved chars.
+      // workspaceId is typically a UUID; orgName is typically a slug, but
+      // encodeURIComponent is a cheap guard against future weirdness.
+      return `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch { /* fall through to default */ }
+  return "https://deeplake.ai";
+}
+
 // ── Retry & concurrency primitives ──────────────────────────────────────────
 
 const RETRYABLE_CODES = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 const MAX_CONCURRENCY = 5;
-const QUERY_TIMEOUT_MS = Number(process.env.HIVEMIND_QUERY_TIMEOUT_MS ?? 10_000);
+
+// Lazy read: the openclaw bundle replaces `process.env.HIVEMIND_QUERY_TIMEOUT_MS`
+// with a `globalThis.__hivemind_tuning__?.HIVEMIND_QUERY_TIMEOUT_MS` lookup via
+// esbuild `define`. The lookup must happen at call-time (not module-init) so
+// it picks up the value openclaw populates AFTER this module is imported.
+// Was previously `const QUERY_TIMEOUT_MS = …` at module top — that would have
+// frozen the value to 10000 for the openclaw bundle regardless of pluginConfig.
+function getQueryTimeoutMs(): number {
+  return Number(process.env.HIVEMIND_QUERY_TIMEOUT_MS ?? 10_000);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -149,8 +224,9 @@ export class DeeplakeApi {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       let resp: Response;
+      const timeoutMs = getQueryTimeoutMs();
       try {
-        const signal = AbortSignal.timeout(QUERY_TIMEOUT_MS);
+        const signal = AbortSignal.timeout(timeoutMs);
         resp = await fetch(`${this.apiUrl}/workspaces/${this.workspaceId}/tables/query`, {
           method: "POST",
           headers: {
@@ -165,7 +241,7 @@ export class DeeplakeApi {
       } catch (e: unknown) {
         // Network-level failure (DNS, TCP reset, timeout, etc.)
         if (isTimeoutError(e)) {
-          lastError = new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`);
+          lastError = new Error(`Query timeout after ${timeoutMs}ms`);
           throw lastError;
         }
         lastError = e instanceof Error ? e : new Error(String(e));
@@ -199,6 +275,9 @@ export class DeeplakeApi {
         await sleep(delay);
         continue;
       }
+      // Surface a session-start banner for the "out of credits" case before
+      // throwing — see maybeSignalBalanceExhausted's docstring for why.
+      maybeSignalBalanceExhausted(resp.status, text);
       throw new Error(`Query failed: ${resp.status}: ${text.slice(0, 200)}`);
     }
     throw lastError ?? new Error("Query failed: max retries exceeded");
@@ -470,3 +549,11 @@ export class DeeplakeApi {
     await this.ensureLookupIndex(safe, "project_key_name", `("project_key", "name")`);
   }
 }
+
+// ── Test helpers ────────────────────────────────────────────────────────────
+
+/** Reset module-local flags so tests start clean. Not for production use. */
+export function _resetSdkStateForTesting(): void {
+  _signalledBalanceExhausted = false;
+}
+

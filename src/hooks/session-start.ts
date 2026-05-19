@@ -64,6 +64,13 @@ Organization management — each argument is SEPARATE (do NOT quote subcommands 
 Skill management (mine + share reusable Claude skills across the org):
 ${renderSkillifyCommands()}
 
+Embeddings (semantic memory search) — opt-in, persisted in ~/.deeplake/config.json:
+- hivemind embeddings install                        — download deps (~600MB), symlink agents, set enabled:true
+- hivemind embeddings enable                         — flip enabled:true (run install first if deps missing)
+- hivemind embeddings disable                        — flip enabled:false + SIGTERM daemon (deps stay on disk)
+- hivemind embeddings uninstall [--prune]            — remove agent symlinks + disable; --prune wipes deps too
+- hivemind embeddings status                         — show config + deps + per-agent link state
+
 IMPORTANT: Only use bash commands (cat, ls, grep, echo, jq, head, tail, etc.) to interact with ~/.deeplake/memory/. Do NOT use python, python3, node, curl, or other interpreters — they are not available in the memory filesystem. Avoid bash brace expansions like \`{1..10}\` (not fully supported); spell out paths explicitly. Bash output is capped at 10MB total — avoid \`for f in *.json; do cat $f\` style loops on the whole sessions dir.
 
 LIMITS: Do NOT spawn subagents to read deeplake memory. If a file returns empty after 2 attempts, skip it and move on. Report what you found rather than exhaustively retrying.

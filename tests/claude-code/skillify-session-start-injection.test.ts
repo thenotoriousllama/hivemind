@@ -262,7 +262,9 @@ describe("OpenClaw skillify worker (mining) wiring", () => {
     // openclaw bundle's child_process stub doesn't apply, and so the chunk
     // graph stays isolated from the gateway's split chunks).
     expect(cfg).toMatch(/"skillify-worker":\s*"dist\/src\/skillify\/skillify-worker\.js"/);
-    expect(cfg).toMatch(/outdir:\s*"openclaw\/dist"[\s\S]{0,200}skillify-worker/);
+    // Window is generous to leave room for the bundle's comments + the
+    // env-var → globalThis.__hivemind_tuning__ define dispatch table.
+    expect(cfg).toMatch(/outdir:\s*"openclaw\/dist"[\s\S]{0,2000}skillify-worker/);
   });
 
   it("openclaw/src/index.ts bypasses the child_process stub via createRequire", () => {
@@ -281,8 +283,16 @@ describe("OpenClaw skillify worker (mining) wiring", () => {
     expect(src).toMatch(/OPENCLAW_SKILLIFY_WORKER_PATH\s*=\s*joinPath\(__openclaw_dirname,\s*"skillify-worker\.js"\)/);
     // HIVEMIND_SKILLIFY_WORKER=1 recursion guard set on spawn env
     expect(src).toMatch(/HIVEMIND_SKILLIFY_WORKER:\s*"1"/);
-    // agent_end hook calls it after the capture loop
-    expect(src).toMatch(/agent_end[\s\S]{0,3500}Auto-captured[\s\S]{0,500}spawnOpenclawSkillifyWorker/);
+    // Per-runtime dedup guard (#100) — explicit assertions so a future
+    // refactor that drops the Set or its has/add usage fails this test
+    // (CodeRabbit on #172).
+    expect(src).toMatch(/const skillifySpawnedFor = new Set<string>\(\)/);
+    expect(src).toMatch(/if \(!skillifySpawnedFor\.has\(sid\)\)/);
+    expect(src).toMatch(/skillifySpawnedFor\.add\(sid\)/);
+    // agent_end hook calls it after the capture loop. Distance bumped
+    // from 500→1500 to accommodate the per-runtime spawn-dedup comment
+    // block landed for #100 between `Auto-captured` and the spawn site.
+    expect(src).toMatch(/agent_end[\s\S]{0,3500}Auto-captured[\s\S]{0,1500}spawnOpenclawSkillifyWorker/);
     // install: "global" — no per-project cwd, skills land under ~/.claude/skills/
     expect(src).toMatch(/install:\s*"global"/);
   });

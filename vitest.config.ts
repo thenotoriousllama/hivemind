@@ -27,6 +27,7 @@ export default defineConfig({
       "tests/openclaw/**/*.test.ts",
       "tests/pi/**/*.test.ts",
     ],
+    setupFiles: ["./tests/test-setup.ts"],
     environment: "node",
     coverage: {
       provider: "v8",

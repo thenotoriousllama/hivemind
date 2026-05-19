@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderNotifications } from "../../src/notifications/format.js";
-import { welcomeRule } from "../../src/notifications/rules/welcome.js";
 import {
   registerRule,
   listRules,
@@ -58,71 +57,25 @@ describe("format — severity fallbacks", () => {
 });
 
 // ---------------------------------------------------------------------------
-// rules/welcome.ts: optional creds fields
-// ---------------------------------------------------------------------------
-
-describe("welcomeRule — optional creds fallbacks", () => {
-  const baseCreds: Credentials = {
-    token: "tok",
-    orgId: "org-only",
-    savedAt: "2026-05-06T00:00:00Z",
-  };
-
-  it("drops the comma-clause when userName is missing (no awkward 'there' fallback)", () => {
-    const result = welcomeRule.evaluate({
-      agent: "claude-code",
-      creds: { ...baseCreds, userName: undefined },
-      state: { shown: {} },
-    });
-    expect(result?.title).toBe("Welcome back");
-    expect(result?.title).not.toContain("there");
-    expect(result?.title).not.toContain(",");
-  });
-
-  it("falls back to 'your organization' when orgName is missing (does NOT expose orgId UUID)", () => {
-    const result = welcomeRule.evaluate({
-      agent: "claude-code",
-      creds: { ...baseCreds, orgName: undefined, userName: "u" },
-      state: { shown: {} },
-    });
-    expect(result?.body).toContain("your organization");
-    // Critical: must NOT leak the UUID-shaped orgId into user-facing text.
-    expect(result?.body).not.toContain(baseCreds.orgId);
-    expect(result?.body).not.toContain("undefined");
-  });
-
-  it("uses 'org <name>' phrasing when orgName is present", () => {
-    const result = welcomeRule.evaluate({
-      agent: "claude-code",
-      creds: { ...baseCreds, orgName: "acme", userName: "u" },
-      state: { shown: {} },
-    });
-    expect(result?.body).toContain("Connected to org acme");
-  });
-
-  it("falls back to 'default' workspace when workspaceId is missing", () => {
-    const result = welcomeRule.evaluate({
-      agent: "claude-code",
-      creds: { ...baseCreds, workspaceId: undefined, userName: "u" },
-      state: { shown: {} },
-    });
-    expect(result?.body).toContain("default");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // rules/registry.ts: duplicate registration + trigger filtering
+// (Welcome rule's optional-field rendering moved to primary-banner tests.)
 // ---------------------------------------------------------------------------
 
 describe("rules registry — edge cases", () => {
+  const dummyRule: Rule = {
+    id: "dummy-test-rule",
+    trigger: "session_start",
+    evaluate: () => null,
+  };
+
   it("throws on duplicate rule id", () => {
-    registerRule(welcomeRule);
-    expect(() => registerRule(welcomeRule)).toThrow(/duplicate rule id/);
+    registerRule(dummyRule);
+    expect(() => registerRule(dummyRule)).toThrow(/duplicate rule id/);
   });
 
   it("listRules returns currently registered rules", () => {
     expect(listRules()).toHaveLength(0);
-    registerRule(welcomeRule);
+    registerRule(dummyRule);
     expect(listRules()).toHaveLength(1);
   });
 
@@ -154,6 +107,38 @@ describe("rules registry — edge cases", () => {
       state: { shown: {} },
     });
     expect(out).toHaveLength(0);
+  });
+
+  it("evaluateRules returns empty array when no rules are registered (for-loop branch)", () => {
+    // Coverage gap: without this case the for-loop in evaluateRules never
+    // exercises the empty-RULES branch — when _resetRulesForTest leaves the
+    // array empty, the loop body should never run and the function should
+    // return [].
+    const out = evaluateRules("session_start", {
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("evaluateRules pushes truthy results onto the output array (covered branch)", () => {
+    // Coverage gap: the `if (result) out.push(result)` truthy branch on
+    // registry.ts:30. Other tests register rules that return null; this
+    // one returns a real Notification so the push runs.
+    const firingRule: Rule = {
+      id: "always-fires",
+      trigger: "session_start",
+      evaluate: () => ({ id: "always-fires", title: "T", body: "B", dedupKey: { v: 1 } }),
+    };
+    registerRule(firingRule);
+    const out = evaluateRules("session_start", {
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("always-fires");
   });
 });
 
@@ -317,7 +302,7 @@ describe("drainSessionStart — queue drained even when nothing fresh", () => {
     });
 
     const n: Notification = { id: "x", title: "T", body: "B", dedupKey: { v: 1 } };
-    enqueueNotification(n);
+    await enqueueNotification(n);
 
     // First drain: fires, marks as shown
     await drainSessionStart({ agent: "claude-code", creds: null });
@@ -325,7 +310,7 @@ describe("drainSessionStart — queue drained even when nothing fresh", () => {
     expect(readQueue().queue.length).toBe(0);
 
     // Re-enqueue same notification with same dedupKey → fresh.length === 0
-    enqueueNotification(n);
+    await enqueueNotification(n);
     expect(readQueue().queue.length).toBe(1);
 
     writes.length = 0;
@@ -348,7 +333,7 @@ describe("drainSessionStart — queue drained even when nothing fresh", () => {
     vi.spyOn(stateModule, "tryClaim").mockReturnValue(false);
 
     const n: Notification = { id: "y", title: "T2", body: "B2", dedupKey: { v: 99 } };
-    enqueueNotification(n);
+    await enqueueNotification(n);
     await drainSessionStart({ agent: "claude-code", creds: null });
     expect(writes.length).toBe(0);
     expect(readQueue().queue.length).toBe(0); // drained anyway
