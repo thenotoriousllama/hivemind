@@ -2004,6 +2004,8 @@ function createSymlinkAtomic(target, link) {
 // dist/src/hooks/capture.js
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname6, join as join19 } from "node:path";
+import { readFileSync as readFileSync11 } from "node:fs";
+import { homedir as homedir16 } from "node:os";
 var log5 = (msg) => log("capture", msg);
 function resolveEmbedDaemonPath() {
   return join19(dirname6(fileURLToPath3(import.meta.url)), "embeddings", "embed-daemon.js");
@@ -2141,6 +2143,30 @@ function maybeTriggerPeriodicSummary(sessionId, cwd, config) {
   }
 }
 main().catch((e) => {
-  log5(`fatal: ${e.message}`);
+  const msg = e?.message ?? String(e);
+  log5(`fatal: ${msg}`);
+  if (msg.includes("402") && msg.includes("balance_cents")) {
+    try {
+      emitBalanceExhaustedInline();
+    } catch (emitErr) {
+      log5(`inline emit failed: ${emitErr?.message ?? String(emitErr)}`);
+    }
+  }
   process.exit(0);
 });
+function emitBalanceExhaustedInline() {
+  let url = "https://deeplake.ai";
+  try {
+    const credsPath2 = join19(homedir16(), ".deeplake", "credentials.json");
+    const c = JSON.parse(readFileSync11(credsPath2, "utf-8"));
+    if (c.orgName && c.workspaceId) {
+      url = `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch {
+  }
+  const msg = `\u26A0\uFE0F HIVEMIND ALERT: This capture failed because the org is out of Deeplake credits (balance is 0). Memory recall is also returning empty. Tell the user clearly: "Hivemind credits are exhausted \u2014 sessions are not being saved and memory recall is empty. Top up at ${url} to restore."`;
+  const payload = {
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: msg }
+  };
+  process.stdout.write(JSON.stringify(payload));
+}
