@@ -290,6 +290,6 @@ describe("loginWithProvidedToken", () => {
     const ok = await loginWithProvidedToken("bad-tok");
     expect(ok).toBe(false);
     const stderrText = stderrWriteMock.mock.calls.map(c => c[0]).join("");
-    expect(stderrText).toContain("Token authentication failed: API 401: invalid. Continuing install.");
+    expect(stderrText).toContain("Token authentication failed: API 401: invalid");
   });
 });

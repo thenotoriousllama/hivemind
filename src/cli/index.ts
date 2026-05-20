@@ -201,20 +201,35 @@ async function runAuthGate(args: string[]): Promise<void> {
   // finish, offer the API-key paste path. This catches both "I don't want
   // to do the browser dance" and "I started but it timed out / I closed
   // the tab" — both used to dead-end the install with no auth.
+  //
+  // The paste prompt loops up to MAX_PASTE_ATTEMPTS times so a single
+  // typo / stale key doesn't kick the user back out of the install. On
+  // empty input we skip; on success we exit immediately.
   if (!signedIn) {
     log("");
     log("Alternatively, sign in at https://app.deeplake.ai/api-keys, create");
     log("an API key, and paste it here. Press Enter to skip and continue");
     log("installing without sign-in (you can run `hivemind login` later).");
     log("");
-    const pasted = await promptLine("API key: ");
-    if (pasted) {
+
+    const MAX_PASTE_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_PASTE_ATTEMPTS; attempt++) {
+      const pasted = await promptLine("API key: ");
+      if (!pasted) break;
       signedIn = await loginWithProvidedToken(pasted);
-      if (!signedIn) {
-        warn("Continuing install — sign in later with `hivemind login` or `HIVEMIND_TOKEN=<key> hivemind install`.");
+      if (signedIn) break;
+      const remaining = MAX_PASTE_ATTEMPTS - attempt;
+      if (remaining > 0) {
+        log("");
+        log(`That key wasn't accepted (likely invalid or revoked). Try again (${remaining} attempt${remaining === 1 ? "" : "s"} left) or press Enter to skip.`);
+        log("");
       }
-    } else {
-      log("Skipping sign-in. You can sign in anytime with `hivemind login`.");
+    }
+
+    if (!signedIn) {
+      log("");
+      log("Continuing install without sign-in. Run `hivemind login` later, or");
+      log("rerun with `HIVEMIND_TOKEN=<key> hivemind install`.");
     }
   }
 }

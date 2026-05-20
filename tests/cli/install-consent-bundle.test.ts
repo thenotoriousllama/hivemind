@@ -118,7 +118,6 @@ describe("bundle/cli.js install — non-TTY smoke", () => {
     expect(code).toBe(0);
     const combined = stdout + stderr;
     expect(combined).toContain("Token authentication failed");
-    expect(combined).toContain("Continuing install");
     // Codex review fix: after a rejected token, the headless hint MUST
     // also fire so the user has a documented recovery path. Previously
     // runAuthGate returned early and the install finished silently.

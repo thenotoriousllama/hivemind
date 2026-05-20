@@ -169,7 +169,7 @@ const stdoutText = () => stdoutMock.mock.calls.map(c => c[0]).join("");
 const stderrText = () => stderrMock.mock.calls.map(c => c[0]).join("");
 
 describe("install consent gate — TTY paths", () => {
-  it("TTY + decline + paste fallback empty → no auth, install continues, skip hint logged", async () => {
+  it("TTY + decline + paste fallback empty → no auth, install continues, post-loop hint logged", async () => {
     setTTY(true);
     confirmMock.mockResolvedValue(false);
     promptLineMock.mockResolvedValue(""); // user presses Enter at paste prompt
@@ -177,12 +177,75 @@ describe("install consent gate — TTY paths", () => {
     await runInstall([]);
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
-    expect(promptLineMock).toHaveBeenCalledTimes(1); // fallback offered
+    expect(promptLineMock).toHaveBeenCalledTimes(1); // fallback offered, broke on empty
     expect(ensureLoggedInMock).not.toHaveBeenCalled();
     expect(loginWithProvidedTokenMock).not.toHaveBeenCalled();
     expect(installs.installClaude).toHaveBeenCalledTimes(1);
-    expect(stdoutText()).toContain("Skipping sign-in. You can sign in anytime with `hivemind login`.");
+    expect(stdoutText()).toContain("Continuing install without sign-in.");
+    expect(stdoutText()).toContain("hivemind login");
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("TTY + decline + paste invalid 3 times → exhausts retries, install continues", async () => {
+    setTTY(true);
+    confirmMock.mockResolvedValue(false);
+    // Three pastes, none accepted by the server.
+    promptLineMock
+      .mockResolvedValueOnce("bad-1")
+      .mockResolvedValueOnce("bad-2")
+      .mockResolvedValueOnce("bad-3");
+    loginWithProvidedTokenMock.mockResolvedValue(false);
+
+    await runInstall([]);
+
+    expect(promptLineMock).toHaveBeenCalledTimes(3); // MAX_PASTE_ATTEMPTS
+    expect(loginWithProvidedTokenMock).toHaveBeenCalledTimes(3);
+    expect(installs.installClaude).toHaveBeenCalledTimes(1);
+    // The user sees retry hints between attempts.
+    expect(stdoutText()).toContain("That key wasn't accepted");
+    expect(stdoutText()).toContain("2 attempts left");
+    expect(stdoutText()).toContain("1 attempt left");
+    // And the terminal "continuing install" message after the loop.
+    expect(stdoutText()).toContain("Continuing install without sign-in.");
+  });
+
+  it("TTY + decline + paste fails then succeeds → loop exits on success, install continues", async () => {
+    setTTY(true);
+    confirmMock.mockResolvedValue(false);
+    promptLineMock
+      .mockResolvedValueOnce("bad-tok")
+      .mockResolvedValueOnce("good-tok");
+    loginWithProvidedTokenMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await runInstall([]);
+
+    expect(promptLineMock).toHaveBeenCalledTimes(2);
+    expect(loginWithProvidedTokenMock).toHaveBeenNthCalledWith(1, "bad-tok");
+    expect(loginWithProvidedTokenMock).toHaveBeenNthCalledWith(2, "good-tok");
+    expect(installs.installClaude).toHaveBeenCalledTimes(1);
+    // Retry hint is shown after the first failure.
+    expect(stdoutText()).toContain("That key wasn't accepted");
+    // But the final "continuing without sign-in" hint MUST NOT appear since
+    // we ultimately did sign in.
+    expect(stdoutText()).not.toContain("Continuing install without sign-in.");
+  });
+
+  it("TTY + decline + paste fails once then user presses Enter → no further retries, install continues", async () => {
+    setTTY(true);
+    confirmMock.mockResolvedValue(false);
+    promptLineMock
+      .mockResolvedValueOnce("bad-tok")
+      .mockResolvedValueOnce(""); // user gives up
+    loginWithProvidedTokenMock.mockResolvedValue(false);
+
+    await runInstall([]);
+
+    expect(promptLineMock).toHaveBeenCalledTimes(2);
+    expect(loginWithProvidedTokenMock).toHaveBeenCalledTimes(1); // empty isn't a paste
+    expect(stdoutText()).toContain("That key wasn't accepted");
+    expect(stdoutText()).toContain("Continuing install without sign-in.");
   });
 
   it("TTY + decline + paste valid token → loginWithProvidedToken called with pasted value", async () => {

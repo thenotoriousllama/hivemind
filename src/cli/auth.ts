@@ -46,7 +46,12 @@ export async function loginWithProvidedToken(flagToken?: string): Promise<boolea
     log(`Signed in via ${source}.`);
     return true;
   } catch (err) {
-    warn(`Token authentication failed: ${(err as Error).message}. Continuing install.`);
+    // Surface the API error so the user knows whether it was a 401 (revoked
+    // or wrong token), 404 (user not found), network failure, etc. Caller
+    // (runAuthGate) decides whether to retry, fall through, or continue —
+    // we deliberately don't editorialize "Continuing install" here so the
+    // retry-loop UX in the paste fallback doesn't contradict itself.
+    warn(`Token authentication failed: ${(err as Error).message}`);
     return false;
   }
 }
