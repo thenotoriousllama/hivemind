@@ -36,6 +36,15 @@ export interface AutoExtractInput {
   hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  /**
+   * Result of the tool call. For Claude Code's Bash tool this is
+   * `{ stdout, stderr, exit_code, interrupted, is_error }` (the exact
+   * subset depends on the version). We use it ONLY to detect whether
+   * the command succeeded — the orchestrator MUST NOT emit a +1
+   * progress event for a failed merge (codex review pass 2 surfaced
+   * the failed-merge false-positive).
+   */
+  tool_response?: Record<string, unknown>;
 }
 
 export interface AutoExtractOptions {
@@ -75,6 +84,22 @@ export async function tryAutoExtract(
   const command = (input.tool_input as { command?: unknown } | undefined)?.command;
   if (typeof command !== "string") return null;
 
+  // Gate 3: success check. If tool_response carries an exit_code, an
+  // is_error / error flag, or an interrupted flag, treat the command
+  // as failed and skip the event. Real-world cases this catches:
+  //
+  //   gh pr merge 99999   → exit_code 1, "Could not find PR"
+  //   gh pr merge --auto  → exit_code 1 if checks haven't passed
+  //   gh pr merge         → user-interrupted (Ctrl+C) → interrupted=true
+  //   any auth failure    → exit_code != 0
+  //
+  // When tool_response is absent (e.g., Codex / other agents don't
+  // populate it the same way), we fall back to "assume success" — at
+  // worst we keep the previous false-positive risk for that one
+  // agent. Better than refusing to emit for any agent that doesn't
+  // ship exit_code semantics.
+  if (!isToolResponseSuccess(input.tool_response)) return null;
+
   const event = matchCommand(command);
   if (!event) return null;
 
@@ -92,4 +117,28 @@ export async function tryAutoExtract(
   });
 
   return event.kind;
+}
+
+/**
+ * Decide whether a tool_response indicates the command succeeded.
+ * Conservative: returns false on any signal of failure or interruption,
+ * true on missing/empty response (we don't penalize agents that don't
+ * populate the response shape — the orchestrator falls back to the
+ * pre-pass-2 behavior in that case).
+ *
+ * Recognized failure signals (Claude Code Bash semantics):
+ *   - exit_code present and != 0
+ *   - is_error / error truthy
+ *   - interrupted truthy (user Ctrl-C'd the command)
+ */
+function isToolResponseSuccess(resp: Record<string, unknown> | undefined): boolean {
+  if (!resp) return true; // missing → assume success (agent didn't populate)
+  if (resp.interrupted === true) return false;
+  if (resp.is_error === true || resp.error === true) return false;
+  if ("exit_code" in resp) {
+    const code = resp.exit_code;
+    if (typeof code === "number" && code !== 0) return false;
+    if (typeof code === "string" && code !== "0" && code !== "") return false;
+  }
+  return true;
 }

@@ -141,3 +141,99 @@ describe("tryAutoExtract — match → INSERT", () => {
     expect(calls).toEqual([]);
   });
 });
+
+// ── success-gate (codex pass 2 regression) ──────────────────────────────────
+
+describe("tryAutoExtract — Bash success gate (codex review pass 2)", () => {
+  it("emits when tool_response is missing (agent didn't populate — fall back to success)", async () => {
+    const { calls, query } = mockQuery([() => []]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 123" },
+      // no tool_response
+    }, OPTS);
+    expect(out).toBe("gh-pr-merge");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("emits when tool_response.exit_code is 0 (explicit success)", async () => {
+    const { calls, query } = mockQuery([() => []]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 123" },
+      tool_response: { exit_code: 0, stdout: "Merged.", stderr: "" },
+    }, OPTS);
+    expect(out).toBe("gh-pr-merge");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does NOT emit on tool_response.exit_code != 0 (failed merge)", async () => {
+    const { calls, query } = mockQuery([]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 99999" },
+      tool_response: { exit_code: 1, stderr: "Could not find PR 99999" },
+    }, OPTS);
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("handles string exit_code (driver-dependent serialization)", async () => {
+    const { calls, query } = mockQuery([]);
+    expect(await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 1" },
+      tool_response: { exit_code: "1" },
+    }, OPTS)).toBeNull();
+    // exit_code "0" or "" → success
+    const { calls: c2, query: q2 } = mockQuery([() => []]);
+    expect(await tryAutoExtract(q2, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 1" },
+      tool_response: { exit_code: "0" },
+    }, OPTS)).toBe("gh-pr-merge");
+    expect(calls).toEqual([]);
+    expect(c2).toHaveLength(1);
+  });
+
+  it("does NOT emit when tool_response.interrupted is true (user Ctrl+C)", async () => {
+    const { calls, query } = mockQuery([]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 123" },
+      tool_response: { interrupted: true, exit_code: 0 },
+    }, OPTS);
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("does NOT emit when tool_response.is_error is true", async () => {
+    const { calls, query } = mockQuery([]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 123" },
+      tool_response: { is_error: true, stderr: "auth failed" },
+    }, OPTS);
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("does NOT emit when tool_response.error is true (alternate convention)", async () => {
+    const { calls, query } = mockQuery([]);
+    const out = await tryAutoExtract(query, TBL, {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh pr merge 123" },
+      tool_response: { error: true },
+    }, OPTS);
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
+  });
+});

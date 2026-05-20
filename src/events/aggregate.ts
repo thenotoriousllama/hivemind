@@ -17,6 +17,28 @@
  *     (computeCurrent) and bulk batched aggregation (computeAllForTask).
  *
  * The aggregations are read-side only. Writes go through ./append.ts.
+ *
+ * Why we do NOT filter by `task_version` (codex review pass 2 question):
+ *
+ *   Events carry `task_version` for FORENSIC traceability (what version
+ *   of the task was current when this event was emitted), NOT as a
+ *   reset mechanism. Aggregation deliberately sums across all versions
+ *   for one (task_id, kpi_id) pair so that editing a task does not
+ *   reset its progress: someone who's merged 3 PRs against "ship feature
+ *   X" still has 3/5 done after editing the description to "ship
+ *   feature X (P0)".
+ *
+ *   The protection against accidental rebinding-of-old-progress is at a
+ *   different layer: the SessionStart renderer (T6) and `tasks report`
+ *   iterate over the LATEST version's `kpis` JSONB only. An edit that
+ *   replaces the KPI set with new kpi_ids will simply not display the
+ *   old events — they're orphaned in the aggregate map. An edit that
+ *   keeps the same kpi_id is interpreted as "still the same KPI", and
+ *   accumulating progress is the intuitive UX.
+ *
+ *   If a future use case wants point-in-time / forensic views ("what
+ *   was the v=1 state of this KPI?"), a `computeForVersion(task_id,
+ *   kpi_id, version)` helper can be added without breaking this one.
  */
 
 import { sqlIdent, sqlStr } from "../utils/sql.js";

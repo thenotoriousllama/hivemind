@@ -179,6 +179,11 @@ async function main(): Promise<void> {
   // task_events; the first event in a fresh session pays a one-time
   // create cost. Pre-ensuring task_events at session-start is a v1.1
   // optimization tracked in the plan.
+  //
+  // tool_response is passed through so the orchestrator can gate
+  // emission on Bash success — failed `gh pr merge 99999` (bad PR id,
+  // auth failure, conflict, interrupted) MUST NOT count as KPI
+  // progress. Codex review pass 2 surfaced this regression.
   try {
     const queryFn = (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>;
     const kind = await tryAutoExtract(queryFn, config.taskEventsTableName, input, {
