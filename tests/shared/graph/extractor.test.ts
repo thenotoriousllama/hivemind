@@ -144,6 +144,14 @@ class C {
       expect(findNode(r, (n) => n.label === "pub")?.exported).toBe(false);
       expect(findNode(r, (n) => n.label === "h")?.exported).toBe(false);
     });
+    it("ECMAScript #private method on exported class is NOT exported (codex P1 fix)", () => {
+      // tree-sitter represents `#h()` as a method_definition whose name field
+      // is a private_property_identifier (no accessibility_modifier child).
+      // The visibility detection must treat the hash-prefixed identifier as
+      // always-private, otherwise it leaks past the accessibility check.
+      const r = extractTypeScript(`export class C { #h() {} }`, "f.ts");
+      expect(findNode(r, (n) => n.label === "#h")?.exported).toBe(false);
+    });
   });
 });
 

@@ -157,20 +157,22 @@ describe("canonicalSnapshot — stable serialization", () => {
   });
 
   it("sorts object keys alphabetically at every level", () => {
-    // We rebuild the snapshot in TWO orders of object construction to verify
-    // the canonical serialization doesn't depend on insertion order.
+    // Build two GraphMetadata instances with REVERSED literal key order to
+    // verify the canonical serialization doesn't depend on JS insertion order.
+    // V8 preserves insertion order for string keys, so without the
+    // recursive key-sort in canonicalSnapshot these would serialize differently.
     const meta1: GraphMetadata = {
       schema_version: 1,
       generator: "hivemind-graph",
       commit_sha: "x",
       repo_key: "k",
     };
-    // Same content, different construction order
-    const meta2: GraphMetadata = {} as GraphMetadata;
-    (meta2 as Record<string, unknown>).repo_key = "k";
-    (meta2 as Record<string, unknown>).commit_sha = "x";
-    (meta2 as Record<string, unknown>).generator = "hivemind-graph";
-    (meta2 as Record<string, unknown>).schema_version = 1;
+    const meta2: GraphMetadata = {
+      repo_key: "k",
+      commit_sha: "x",
+      generator: "hivemind-graph",
+      schema_version: 1,
+    };
 
     const s1 = buildSnapshot([], meta1, makeObservation());
     const s2 = buildSnapshot([], meta2, makeObservation());

@@ -243,9 +243,12 @@ function handleDeclaration(
             // Exported reachability: only public methods of an exported class are
             // truly externally reachable. Private/protected methods may exist on an
             // exported class but are not part of its external API. TS default is
-            // public when no modifier is present.
+            // public when no modifier is present. ECMAScript hard-private methods
+            // (`#name`) carry no accessibility_modifier but ARE always private —
+            // tree-sitter reports them as a `private_property_identifier` name child.
             const accessibility = firstNamedChildOfTypes(member, ["accessibility_modifier"]);
-            const isPublic = accessibility === null || accessibility.text === "public";
+            const isHardPrivate = firstNamedChildOfTypes(member, ["private_property_identifier"]) !== null;
+            const isPublic = !isHardPrivate && (accessibility === null || accessibility.text === "public");
             const methodExported = exported && isPublic;
             const methodKey = `${classNode.label}.${methodName}`;
             const methodNode = makeNodeWithExplicitLabel(
