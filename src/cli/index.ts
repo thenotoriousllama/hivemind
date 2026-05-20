@@ -13,6 +13,7 @@ import {
 } from "./embeddings.js";
 import { ensureLoggedIn, isLoggedIn, loginWithProvidedToken, maybeShowOrgChoice } from "./auth.js";
 import { runAuthCommand } from "../commands/auth-login.js";
+import { runGraphCommand } from "../commands/graph.js";
 import { runSkillifyCommand } from "../commands/skillify.js";
 import { confirm, detectPlatforms, allPlatformIds, log, promptLine, warn, type PlatformId } from "./util.js";
 import { getVersion } from "./version.js";
@@ -334,6 +335,11 @@ async function main(): Promise<void> {
 
   if (cmd === "skillify") {
     runSkillifyCommand(args.slice(1));
+    return;
+  }
+
+  if (cmd === "graph") {
+    runGraphCommand(args.slice(1));
     return;
   }
 
