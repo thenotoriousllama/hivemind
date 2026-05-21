@@ -53,11 +53,24 @@ export function spawnGraphPullWorker(cwd: string, bundleDir: string, deps: Spawn
     const sp = deps.spawn ?? spawn;
     // `nohup` makes the worker survive the parent's exit on Unix. On
     // Windows nohup doesn't exist, but Claude Code's primary platforms
-    // are macOS + Linux — Windows users get an EBUSY/ENOENT here which
-    // the try/catch swallows, and the build pipeline still uses local
-    // snapshots correctly.
-    sp("nohup", ["node", workerPath, "--cwd", cwd], opts).unref();
+    // are macOS + Linux — Windows users get an ENOENT here, handled
+    // below via the async 'error' listener.
+    const child = sp("nohup", ["node", workerPath, "--cwd", cwd], opts);
+    // Codex P1 fix: spawn() reports ENOENT asynchronously via an 'error'
+    // event, NOT a synchronous throw. Without a listener, the unhandled
+    // 'error' becomes an unhandled-exception that crashes the parent
+    // SessionStart hook on any system where nohup/node isn't on PATH
+    // (Windows, minimal Alpine containers, distroless, etc.). An empty
+    // listener silently absorbs it — exactly the degradation we want.
+    child.on("error", () => {
+      // Best-effort: missing binary, permission denied, etc. The pull
+      // is opt-in convenience; if we can't even spawn, fall back to
+      // whatever local snapshot already exists.
+    });
+    child.unref();
   } catch {
-    // best-effort — pull is opt-in convenience, never break the hook
+    // Defensive: an extremely unusual sync throw from spawn (e.g.
+    // invalid argv types). The async 'error' handler above covers
+    // the common ENOENT path; this catch is just belt-and-suspenders.
   }
 }

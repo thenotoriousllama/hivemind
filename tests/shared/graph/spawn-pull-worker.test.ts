@@ -23,9 +23,15 @@ describe("spawnGraphPullWorker", () => {
     const calls: { cmd: string; args: string[]; opts: unknown }[] = [];
     const impl = (cmd: string, args: readonly string[], opts: unknown) => {
       calls.push({ cmd, args: [...args], opts });
-      // The real spawn returns a ChildProcess; only .unref() is touched
-      // by our code path, so a minimal stand-in is enough.
-      return { unref: vi.fn() } as unknown as ChildProcess;
+      // Stand-in for ChildProcess: .on(...) for the async 'error' event,
+      // .unref() so the parent can exit without waiting. Both required —
+      // our code path now installs an 'error' listener (codex P1 fix)
+      // before calling .unref().
+      const child: { on: (e: string, cb: (...a: unknown[]) => void) => unknown; unref: () => void } = {
+        on: () => child,
+        unref: vi.fn(),
+      };
+      return child as unknown as ChildProcess;
     };
     const spy = impl as unknown as typeof nodeSpawn;
     return { calls, spy };
@@ -54,7 +60,11 @@ describe("spawnGraphPullWorker", () => {
 
   it("calls .unref() on the returned child (parent can exit without waiting)", () => {
     const unref = vi.fn();
-    const impl = () => ({ unref }) as unknown as ChildProcess;
+    const child: { unref: typeof unref; on: (e: string, cb: (...a: unknown[]) => void) => unknown } = {
+      unref,
+      on: () => child,
+    };
+    const impl = () => child as unknown as ChildProcess;
     const spy = impl as unknown as typeof nodeSpawn;
     spawnGraphPullWorker("/cwd", "/bundle", { spawn: spy });
     expect(unref).toHaveBeenCalledTimes(1);
@@ -73,6 +83,29 @@ describe("spawnGraphPullWorker", () => {
     const impl = () => { throw new Error("spawn ENOENT nohup"); };
     const spy = impl as unknown as typeof nodeSpawn;
     expect(() => spawnGraphPullWorker("/cwd", "/bundle", { spawn: spy })).not.toThrow();
+  });
+
+  it("registers an 'error' listener on the child (codex P1: ENOENT is ASYNC)", () => {
+    // spawn() reports missing-binary errors via an async 'error' event,
+    // NOT a sync throw. Without a listener, the unhandled event crashes
+    // the parent process. We verify that spawnGraphPullWorker installs
+    // a listener so the degradation is silent.
+    const onCalls: { event: string; cb: (...args: unknown[]) => void }[] = [];
+    const child = {
+      on: (event: string, cb: (...args: unknown[]) => void) => { onCalls.push({ event, cb }); return child; },
+      unref: vi.fn(),
+    };
+    const impl = () => child as unknown as ChildProcess;
+    const spy = impl as unknown as typeof nodeSpawn;
+    spawnGraphPullWorker("/cwd", "/bundle", { spawn: spy });
+
+    const errorListeners = onCalls.filter(c => c.event === "error");
+    expect(errorListeners).toHaveLength(1);
+
+    // Sanity: triggering the listener must NOT throw. This is what
+    // would happen at runtime when nohup is missing — the listener
+    // absorbs the error silently.
+    expect(() => errorListeners[0]!.cb(new Error("spawn ENOENT"))).not.toThrow();
   });
 
   it("worker path is composed via join — survives trailing slashes in bundleDir", () => {

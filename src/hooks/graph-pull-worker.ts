@@ -42,13 +42,58 @@ function getArg(name: string): string | null {
   return process.argv[idx + 1]!;
 }
 
+/**
+ * Hard wall-clock timeout for the worker. The DeeplakeApi fetch() path
+ * does NOT install an AbortSignal on its HTTP requests (codex P1 in this
+ * commit: graph-pull-worker.ts citing src/deeplake-api.ts:413), so a
+ * network stall, blackholed connection, or stuck proxy could leave this
+ * worker waiting indefinitely. With repeated SessionStart events (think
+ * `claude -p` in a tight scripted loop), detached workers would
+ * accumulate. We bound the lifetime here so the worst case is N
+ * concurrent workers, each capped at WORKER_TIMEOUT_MS.
+ *
+ * 30 seconds is generous for a pull: SELECT ~300-500ms + ~1 MB download
+ * over a slow link still fits well under it, and a real network failure
+ * shows up well before. Tuneable via HIVEMIND_GRAPH_PULL_TIMEOUT_MS.
+ */
+function workerTimeoutMs(): number {
+  const raw = process.env.HIVEMIND_GRAPH_PULL_TIMEOUT_MS;
+  if (raw === undefined) return 30_000;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+}
+
 async function main(): Promise<void> {
   const cwd = getArg("--cwd") ?? process.cwd();
   const t0 = Date.now();
 
+  // Top-level timeout: race pullSnapshot against a deadline. If
+  // pullSnapshot doesn't complete in time, log + exit forcibly. The
+  // dangling promise stays unresolved until the process exits (which
+  // happens right after), so no leak — just a forced shutdown.
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    setTimeout(() => resolve("timeout"), workerTimeoutMs()).unref();
+  });
+
   let logLine: string;
   try {
-    const outcome = await pullSnapshot(cwd);
+    const outcome = await Promise.race([pullSnapshot(cwd), timeoutPromise]);
+    if (outcome === "timeout") {
+      const dur = Date.now() - t0;
+      logLine = `[${new Date().toISOString()}] timeout (${dur}ms) — pullSnapshot did not return within ${workerTimeoutMs()}ms; forcing exit\n`;
+      // Write the log line synchronously then exit, bypassing the
+      // unreachable `outcome` branches below.
+      try {
+        const { key } = deriveProjectKey(cwd);
+        const dir = repoDir(key);
+        mkdirSync(dir, { recursive: true });
+        appendFileSync(join(dir, ".graph-pull.log"), logLine);
+      } catch {
+        // best-effort
+      }
+      process.exit(0);
+    }
+    // TS narrows `outcome` to PullOutcome after the early return above.
     const dur = Date.now() - t0;
     const extras: string[] = [];
     if (outcome.kind === "pulled") {
