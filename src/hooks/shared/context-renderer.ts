@@ -71,16 +71,30 @@ export async function renderContextBlock(
   const log = opts.log ?? (() => { /* nothing */ });
 
   try {
+    // Per-section sub-tries so a missing/inaccessible rules table
+    // doesn't drop the tasks block (and vice versa). Codex review
+    // pass 3 surfaced this: in workspaces that have used `hivemind
+    // tasks` but not `hivemind rules`, the rules table doesn't
+    // exist yet, and the prior single outer try-catch would return
+    // "" before listTasks even ran. Each fetch now degrades to []
+    // on failure — log + continue with what we have.
+
     // Over-fetch rules so the "X more" truncation hint can give a
     // useful count (not just "more"). 4× the display cap is a
     // reasonable balance — surfaces "this team has lots of rules"
     // without unbounded reads on a giant org. The reported count is
     // approximate beyond the over-fetch window; documented as a v1
     // limitation.
-    const rules = await listRules(query, input.rulesTable, {
-      status: "active",
-      limit: Math.max(maxRules * 4, maxRules + 1),
-    });
+    let rules: import("../../rules/index.js").RuleRow[] = [];
+    try {
+      rules = await listRules(query, input.rulesTable, {
+        status: "active",
+        limit: Math.max(maxRules * 4, maxRules + 1),
+      });
+    } catch (rulesErr: unknown) {
+      const rmsg = rulesErr instanceof Error ? rulesErr.message : String(rulesErr);
+      log(`render-context-block: rules unavailable (continuing): ${rmsg}`);
+    }
 
     // Two SEPARATE listTasks queries — one for team-scope (any
     // assignee) and one for me-scope (current user only) — then
@@ -92,17 +106,27 @@ export async function renderContextBlock(
     //
     // The cost is one extra SELECT round-trip per SessionStart; the
     // correctness gain (no silently-missing tasks) is worth it.
-    const teamTasks = await listTasks(query, input.tasksTable, {
-      scope: "team",
-      status: "active",
-      limit: Math.max(maxTasks * 4, maxTasks + 1),
-    });
-    const myTasks = await listTasks(query, input.tasksTable, {
-      scope: "mine",
-      status: "active",
-      current_user: input.currentUser,
-      limit: Math.max(maxTasks * 4, maxTasks + 1),
-    });
+    // The pair shares one sub-try because both queries hit the same
+    // table — if it's missing, both fail; if it exists, both succeed.
+    let teamTasks: import("../../tasks/index.js").TaskRow[] = [];
+    let myTasks: import("../../tasks/index.js").TaskRow[] = [];
+    try {
+      teamTasks = await listTasks(query, input.tasksTable, {
+        scope: "team",
+        status: "active",
+        limit: Math.max(maxTasks * 4, maxTasks + 1),
+      });
+      myTasks = await listTasks(query, input.tasksTable, {
+        scope: "mine",
+        status: "active",
+        current_user: input.currentUser,
+        limit: Math.max(maxTasks * 4, maxTasks + 1),
+      });
+    } catch (tasksErr: unknown) {
+      const tmsg = tasksErr instanceof Error ? tasksErr.message : String(tasksErr);
+      log(`render-context-block: tasks unavailable (continuing): ${tmsg}`);
+      // teamTasks / myTasks stay [] — block still renders any rules.
+    }
     const visibleTasks = mergeAndDedupTasks(teamTasks, myTasks);
 
     const rulesShown = rules.slice(0, maxRules);

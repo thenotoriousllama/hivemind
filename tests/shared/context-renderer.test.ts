@@ -98,6 +98,39 @@ describe("renderContextBlock — empty + degradation", () => {
     expect(out).toContain("PRs merged: 0/5 count");
   });
 
+  it("missing rules table does NOT drop the tasks section (codex P2 pass 3)", async () => {
+    // Workspace has only used `hivemind tasks` so far — the rules
+    // table was never created. Prior to the pass-3 fix, the rules
+    // SELECT threw inside the outer try and the WHOLE block was
+    // dropped before listTasks even ran. Now rules failures are
+    // localized to the rules section; tasks still inject.
+    const { query } = mockQuery([
+      () => { throw new Error(`relation "hivemind_rules" does not exist`); },
+      () => [fakeTask()],          // listTasks team
+      () => [],                    // listTasks mine
+      () => [],                    // computeAllForTasks (no events)
+    ]);
+    const out = await renderContextBlock(query, { ...TABLES, currentUser: "alice@activeloop.ai" });
+    expect(out).not.toContain("HIVEMIND RULES");
+    expect(out).toContain("HIVEMIND TASKS");
+    expect(out).toContain("task-1");
+  });
+
+  it("missing tasks table does NOT drop the rules section (codex P2 pass 3, symmetric)", async () => {
+    // Symmetric of the above: rules table is present, tasks table
+    // missing. The rules section should still render.
+    const { query } = mockQuery([
+      () => [fakeRule({ text: "no DROP TABLE on prod" })], // listRules ok
+      () => { throw new Error(`relation "hivemind_tasks" does not exist`); }, // team query throws
+      // mine query is not reached because the team query already failed
+      // inside the shared tasks sub-try; both teamTasks and myTasks stay [].
+    ]);
+    const out = await renderContextBlock(query, { ...TABLES, currentUser: "alice@activeloop.ai" });
+    expect(out).toContain("HIVEMIND RULES");
+    expect(out).toContain("no DROP TABLE on prod");
+    expect(out).not.toContain("HIVEMIND TASKS");
+  });
+
   it("swallows missing-table errors and returns '' (SessionStart MUST NOT fail)", async () => {
     const { query } = mockQuery([
       () => { throw new Error(`relation "hivemind_rules" does not exist`); },
