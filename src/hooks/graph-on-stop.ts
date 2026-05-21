@@ -1,9 +1,19 @@
 /**
- * Stop-hook auto-build for the codebase-graph feature (Phase 1.5).
+ * Auto-build hook for the codebase-graph feature (Phase 1.5).
  *
- * Registered in claude-code/hooks/hooks.json under "Stop" with async: true so
- * Claude Code doesn't wait for it. Fires after every session end, but does
- * almost no work in the common case:
+ * Registered in claude-code/hooks/hooks.json under BOTH "Stop" and
+ * "SessionEnd" with async: true. Why both:
+ *   - "Stop" fires after every model turn in INTERACTIVE Claude sessions.
+ *     Rate-limit gate (10 min default) makes this cheap; you get
+ *     near-real-time graph freshness while coding.
+ *   - "SessionEnd" fires when the session closes. The ONLY end-of-session
+ *     event that fires in `claude -p` non-interactive mode (where Stop is
+ *     skipped), so without this registration `claude -p --plugin-dir` runs
+ *     the agent and exits without ever rebuilding the graph.
+ * Both paths run the same gate logic and share the same .last-build.json
+ * rate limit, so double-firing is harmless.
+ *
+ * Common-case workload (when the gate skips):
  *
  *   1. Read ~/.hivemind/graphs/<key>/.last-build.json
  *   2. If now - lastBuild.ts < TICK_INTERVAL_MS → exit 0 (rate limit)
