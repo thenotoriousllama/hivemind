@@ -175,6 +175,7 @@ export function writeSnapshot(
   snapshot: GraphSnapshot,
   baseDir: string,
   trigger: SnapshotTrigger = "unknown",
+  worktreeId?: string,
 ): WriteSnapshotResult {
   const sha256 = computeSnapshotSha256(snapshot);
   const commitSha = snapshot.graph.commit_sha;
@@ -189,9 +190,19 @@ export function writeSnapshot(
   const canonical = canonicalSnapshot(snapshot);
   writeFileAtomic(snapshotPath, canonical);
 
+  // Per-worktree singleton files. When worktreeId is provided (production
+  // path), latest-commit.txt + .last-build.json live under
+  // baseDir/worktrees/<worktreeId>/ so two checkouts of the same repo on
+  // the same machine don't overwrite each other's metadata. When omitted
+  // (legacy / non-worktree tests), they live in baseDir root — same as
+  // before this change. See lastBuildPath() doc for the full rationale.
+  const worktreeRoot = worktreeId !== undefined
+    ? join(baseDir, "worktrees", worktreeId)
+    : baseDir;
+
   let latestCommitPath: string | null = null;
   if (commitSha !== null) {
-    latestCommitPath = join(baseDir, "latest-commit.txt");
+    latestCommitPath = join(worktreeRoot, "latest-commit.txt");
     writeFileAtomic(latestCommitPath, `${commitSha}\n`);
   }
 
@@ -204,11 +215,15 @@ export function writeSnapshot(
     snapshot_sha256: sha256,
     node_count: snapshot.nodes.length,
     edge_count: snapshot.links.length,
-  });
+  }, worktreeId);
 
   // history.jsonl — append a one-line audit record. Best-effort; failure
   // doesn't roll back the snapshot. Trigger comes from the caller — if
   // they don't pass one, we record "unknown" rather than guess.
+  // INTENTIONALLY SHARED across worktrees: history is append-only and
+  // each entry is self-describing (carries its own commit_sha + ts +
+  // node/edge counts), so interleaved entries from different checkouts
+  // are correct, not destructive.
   appendHistoryEntry(baseDir, entryFromSnapshot(snapshot, sha256, trigger));
 
   return { snapshotPath, latestCommitPath, snapshotSha256: sha256 };

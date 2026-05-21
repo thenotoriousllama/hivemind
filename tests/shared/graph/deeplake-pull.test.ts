@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +10,11 @@ import type { DeeplakeApi } from "../../../src/deeplake-api.js";
 import { writeLastBuild, readLastBuild } from "../../../src/graph/last-build.js";
 import { repoDir } from "../../../src/graph/snapshot.js";
 import { deriveProjectKey } from "../../../src/utils/repo-identity.js";
+
+/** Mirror of workTreeIdFor in src/commands/graph.ts and elsewhere. */
+function worktreeIdFromCwd(cwd: string): string {
+  return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+}
 
 function makeConfig(): Config {
   return {
@@ -262,10 +268,11 @@ describe("pullSnapshot — outcome resolution", () => {
     const snapshotPath = join(baseDir, "snapshots", "head1234abcd.json");
     expect(existsSync(snapshotPath)).toBe(true);
     expect(readFileSync(snapshotPath, "utf8")).toBe(CLOUD_PAYLOAD);
-    // latest-commit.txt updated
-    expect(readFileSync(join(baseDir, "latest-commit.txt"), "utf8").trim()).toBe("head1234abcd");
-    // .last-build.json mirrors cloud metadata
-    const lb = readLastBuild(baseDir);
+    // latest-commit.txt updated (now per-worktree, under worktrees/<id>/)
+    const wt = worktreeIdFromCwd(tmpCwd);
+    expect(readFileSync(join(baseDir, "worktrees", wt, "latest-commit.txt"), "utf8").trim()).toBe("head1234abcd");
+    // .last-build.json mirrors cloud metadata (per-worktree)
+    const lb = readLastBuild(baseDir, wt);
     expect(lb).not.toBeNull();
     expect(lb!.commit_sha).toBe("head1234abcd");
     expect(lb!.snapshot_sha256).toBe(cloudSha);
@@ -317,7 +324,7 @@ describe("pullSnapshot — outcome resolution", () => {
     expect(result.kind).toBe("pulled");
     // After pull: snapshot file for A exists, last-build now points at A
     expect(existsSync(join(baseDir, "snapshots", "head1234abcd.json"))).toBe(true);
-    const lb = readLastBuild(baseDir);
+    const lb = readLastBuild(baseDir, worktreeIdFromCwd(tmpCwd));
     expect(lb!.commit_sha).toBe("head1234abcd");
     expect(lb!.snapshot_sha256).toBe(cloudSha);
   });
@@ -376,8 +383,8 @@ describe("pullSnapshot — outcome resolution", () => {
       makeApi: () => api,
     });
     expect(result.kind).toBe("pulled");
-    // .last-build.json now reflects cloud state
-    const lb = readLastBuild(baseDir);
+    // .last-build.json now reflects cloud state (per-worktree path)
+    const lb = readLastBuild(baseDir, worktreeIdFromCwd(tmpCwd));
     expect(lb!.ts).toBe(2_000_000_000_000);
     expect(lb!.snapshot_sha256).toBe("new-cloud-sha");
     expect(lb!.node_count).toBe(5);

@@ -37,7 +37,26 @@ export interface LastBuildState {
   edge_count?: number;
 }
 
-export function lastBuildPath(baseDir: string): string {
+/**
+ * Returns the per-worktree state path when `worktreeId` is provided, or the
+ * legacy root path otherwise.
+ *
+ * Two worktrees of the same project on the same machine share `baseDir`
+ * (repo_key is derived from the git remote URL, not the cwd). Without
+ * worktree partitioning, two checkouts at different commits would
+ * overwrite each other's `.last-build.json` — the SessionStart inject
+ * would then show the *other* worktree's commit/sha as if it were mine,
+ * and any code that resolves "snapshot file for last build" would point
+ * at the wrong snapshot. Sub-dirring by worktreeId fixes that.
+ *
+ * The legacy (no-worktreeId) path is kept ONLY for tests that don't
+ * exercise the multi-worktree behavior — production callers ALWAYS pass
+ * worktreeId.
+ */
+export function lastBuildPath(baseDir: string, worktreeId?: string): string {
+  if (worktreeId !== undefined) {
+    return join(baseDir, "worktrees", worktreeId, ".last-build.json");
+  }
   return join(baseDir, ".last-build.json");
 }
 
@@ -46,8 +65,8 @@ export function lastBuildPath(baseDir: string): string {
  * Errors are swallowed: a failure to write the state file should NOT roll
  * back a successful snapshot write (the snapshot is the source of truth).
  */
-export function writeLastBuild(baseDir: string, state: LastBuildState): void {
-  const path = lastBuildPath(baseDir);
+export function writeLastBuild(baseDir: string, state: LastBuildState, worktreeId?: string): void {
+  const path = lastBuildPath(baseDir, worktreeId);
   try {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
@@ -62,9 +81,21 @@ export function writeLastBuild(baseDir: string, state: LastBuildState): void {
  * Load last-build state. Returns null on missing file, parse failure, or
  * shape mismatch — caller treats null as "never built".
  */
-export function readLastBuild(baseDir: string): LastBuildState | null {
-  const path = lastBuildPath(baseDir);
-  if (!existsSync(path)) return null;
+export function readLastBuild(baseDir: string, worktreeId?: string): LastBuildState | null {
+  // Migration-friendly read order:
+  //   1. New per-worktree path (production callers all pass worktreeId now)
+  //   2. Fallback to legacy root path — covers (a) tests that don't pass
+  //      worktreeId and (b) users with pre-fix singletons still at root
+  //      from builds before this fix landed. The next writeSnapshot /
+  //      pullSnapshot will materialize the new path, after which the old
+  //      file becomes orphaned cruft.
+  let path = lastBuildPath(baseDir, worktreeId);
+  if (!existsSync(path)) {
+    if (worktreeId === undefined) return null;
+    const legacy = lastBuildPath(baseDir, undefined);
+    if (!existsSync(legacy)) return null;
+    path = legacy;
+  }
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");

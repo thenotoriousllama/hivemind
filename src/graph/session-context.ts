@@ -40,12 +40,21 @@
  * — in all these cases SessionStart simply skips the inject.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { readLastBuild } from "./last-build.js";
 import { repoDir } from "./snapshot.js";
 import { deriveProjectKey } from "../utils/repo-identity.js";
+
+/**
+ * Mirror of workTreeIdFor in src/commands/graph.ts. Each consumer of the
+ * per-worktree singletons computes worktreeId from its own cwd.
+ */
+function workTreeIdFor(cwd: string): string {
+  return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+}
 
 export interface GraphContextDeps {
   /** Override for tests; defaults to Date.now(). */
@@ -73,7 +82,11 @@ export function graphContextLine(cwd: string, deps: GraphContextDeps = {}): stri
   // file-open dance for the common "first session in a fresh repo" case.
   if (!existsSync(snapshotsDir)) return null;
 
-  const last = readLastBuild(baseDir);
+  // Per-worktree read: each checkout has its own .last-build.json under
+  // baseDir/worktrees/<id>/. Without this, the inject would show a
+  // sibling worktree's commit/sha and the model would read the WRONG
+  // snapshot file thinking it's the one for our HEAD.
+  const last = readLastBuild(baseDir, workTreeIdFor(cwd));
   if (last === null) return null;
 
   // Prompt-injection / path-traversal defence. commit_sha and snapshot_sha256

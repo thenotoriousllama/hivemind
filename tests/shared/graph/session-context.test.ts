@@ -229,6 +229,78 @@ describe("graphContextLine", () => {
     expect(line).toContain("Prefer reading current source");
   });
 
+  // ── Multi-worktree isolation (codex-discovered bug from session 2026-05-21)
+  it("two worktrees of the same repo do NOT stomp each other's .last-build.json", async () => {
+    // Setup: simulate two checkouts of the same project on the same
+    // machine. deriveProjectKey returns the same key for both (it
+    // hashes the git remote URL, not the cwd), so they share baseDir.
+    // Per-worktree singletons must keep them isolated.
+    //
+    // Use a single temp parent and two child dirs to ensure deriveProjectKey
+    // returns the SAME key for both (since both are outside a git repo,
+    // it falls back to a path-based key — make sure they share a parent
+    // so the fallback hashes the same root).
+    //
+    // Simpler: just reuse cwd and write two LastBuild states with
+    // different worktreeIds; assert each is read back independently.
+    const { writeLastBuild, readLastBuild } = await import("../../../src/graph/last-build.js");
+    mkdirSync(snapshotsDir, { recursive: true });
+
+    // worktree-A at commit X
+    writeLastBuild(baseDir, {
+      ts: 1_000_000,
+      commit_sha: "commitX",
+      snapshot_sha256: "x".repeat(64),
+      node_count: 100,
+      edge_count: 50,
+    }, "wtA-deadbeef0000");
+
+    // worktree-B at commit Y (a different "checkout" of same repo)
+    writeLastBuild(baseDir, {
+      ts: 2_000_000,
+      commit_sha: "commitY",
+      snapshot_sha256: "y".repeat(64),
+      node_count: 200,
+      edge_count: 75,
+    }, "wtB-cafebabe0000");
+
+    // Each worktree reads its own state — NO cross-contamination
+    const a = readLastBuild(baseDir, "wtA-deadbeef0000");
+    const b = readLastBuild(baseDir, "wtB-cafebabe0000");
+    expect(a!.commit_sha).toBe("commitX");
+    expect(a!.node_count).toBe(100);
+    expect(b!.commit_sha).toBe("commitY");
+    expect(b!.node_count).toBe(200);
+
+    // A worktree that hasn't built yet sees null (NOT the other worktree's data)
+    const c = readLastBuild(baseDir, "wtC-fresh0000000");
+    expect(c).toBeNull();
+  });
+
+  it("legacy root .last-build.json is still readable (migration-friendly fallback)", async () => {
+    // A pre-fix install has .last-build.json at baseDir root, no
+    // worktrees/ subdir yet. After the fix, callers pass worktreeId
+    // and expect to read the per-worktree path FIRST, then fall back
+    // to the legacy root path. Without this, the first session after
+    // upgrading would lose access to its pre-fix state and trigger a
+    // spurious rebuild.
+    const { writeLastBuild, readLastBuild } = await import("../../../src/graph/last-build.js");
+    mkdirSync(snapshotsDir, { recursive: true });
+    // Legacy write: no worktreeId → lands at baseDir/.last-build.json
+    writeLastBuild(baseDir, {
+      ts: 1_500_000,
+      commit_sha: "legacyCommit",
+      snapshot_sha256: "1".repeat(64),
+      node_count: 10,
+      edge_count: 5,
+    });
+    // Modern read: worktreeId provided. Per-worktree path doesn't
+    // exist yet → fall back to legacy root → must return the value.
+    const out = readLastBuild(baseDir, "any-worktree-id");
+    expect(out).not.toBeNull();
+    expect(out!.commit_sha).toBe("legacyCommit");
+  });
+
   it("age formatter buckets correctly (s, m, h, d) and truncates", () => {
     mkdirSync(snapshotsDir, { recursive: true });
     const cases: Array<[number, string]> = [

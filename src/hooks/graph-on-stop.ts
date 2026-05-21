@@ -45,6 +45,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -54,6 +55,15 @@ import { readLastBuild } from "../graph/last-build.js";
 import { repoDir } from "../graph/snapshot.js";
 import { isDirectRun } from "../utils/direct-run.js";
 import { deriveProjectKey } from "../utils/repo-identity.js";
+
+/**
+ * Mirror of workTreeIdFor in src/commands/graph.ts. Kept inline (rather
+ * than as a shared util) so the gate hook stays leanly self-contained —
+ * one sha256-hex-truncate, no extra module dependency.
+ */
+function workTreeIdFor(cwd: string): string {
+  return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+}
 
 /**
  * How long between auto-rebuilds. The first SessionEnd after this interval
@@ -97,7 +107,11 @@ export function decideGate(ctx: GateContext): GateDecision {
 
   const { key: repoKey } = deriveProjectKey(ctx.cwd);
   const baseDir = repoDir(repoKey);
-  const last = readLastBuild(baseDir);
+  // Per-worktree gate: read THIS worktree's .last-build.json so we don't
+  // skip a build that *another* worktree just finished. Without the
+  // worktreeId, two checkouts of the same repo would share a singleton
+  // .last-build.json and the gate would refuse to rebuild for either.
+  const last = readLastBuild(baseDir, workTreeIdFor(ctx.cwd));
 
   if (last === null) {
     // Never built before: fire so the user gets an initial snapshot.

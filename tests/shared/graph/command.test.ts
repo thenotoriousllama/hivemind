@@ -119,7 +119,12 @@ describe("runGraphCommand build — end-to-end against a tiny git repo", () => {
     const repoOutDir = join(graphsHome, homes[0]!);
 
     const snapshotPath = join(repoOutDir, "snapshots", `${commit}.json`);
-    const latestPath = join(repoOutDir, "latest-commit.txt");
+    // latest-commit.txt now lives under worktrees/<worktree_id>/ so two
+    // checkouts of the same project don't overwrite each other.
+    // worktree_id = sha256(cwd).slice(0,16) — see workTreeIdFor in
+    // src/commands/graph.ts.
+    const worktreeId = require("node:crypto").createHash("sha256").update(workDir).digest("hex").slice(0, 16);
+    const latestPath = join(repoOutDir, "worktrees", worktreeId, "latest-commit.txt");
     expect(existsSync(snapshotPath)).toBe(true);
     expect(readFileSync(latestPath, "utf8").trim()).toBe(commit);
 

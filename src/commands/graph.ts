@@ -483,7 +483,11 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   };
 
   const snapshot = buildSnapshot(extractions, metadata, observation);
-  const result = writeSnapshot(snapshot, baseDir, opts.trigger);
+  // Pass worktreeId so writeSnapshot routes latest-commit.txt + .last-build.json
+  // under baseDir/worktrees/<id>/ instead of clobbering another worktree's
+  // singletons. Snapshots/cache/history stay shared at the repo level.
+  const worktreeId = workTreeIdFor(opts.cwd);
+  const result = writeSnapshot(snapshot, baseDir, opts.trigger, worktreeId);
 
   console.log("");
   console.log(`Snapshot:      ${result.snapshotPath}`);
@@ -496,7 +500,7 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   // Phase 3: push to Deeplake `codebase` table. Best-effort — any failure
   // logs and returns; the local snapshot is the source of truth. Skips
   // silently when not authenticated (loadConfig returns null).
-  const worktreeId = workTreeIdFor(opts.cwd);
+  // worktreeId already computed above for the writeSnapshot call.
   const pushOutcome = await pushSnapshot(snapshot, worktreeId);
   switch (pushOutcome.kind) {
     case "inserted":

@@ -34,8 +34,18 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+
+/**
+ * Mirror of workTreeIdFor in src/commands/graph.ts. Per-worktree singletons
+ * (.last-build.json + latest-commit.txt) are partitioned by this id so two
+ * checkouts of the same project don't overwrite each other.
+ */
+function workTreeIdFor(cwd: string): string {
+  return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+}
 
 import { loadConfig, type Config } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
@@ -146,7 +156,11 @@ export async function pullSnapshot(
   // let the cloud bytes land locally (correct outcome: the user
   // doesn't have A locally and we just fetched it).
   const baseDir = repoDir(repoKey);
-  const local = readLastBuild(baseDir);
+  // Per-worktree state: read THIS worktree's .last-build.json, not any
+  // sibling's. Without this, after pull worktree-A would overwrite
+  // worktree-B's metadata (or vice versa).
+  const worktreeId = workTreeIdFor(cwd);
+  const local = readLastBuild(baseDir, worktreeId);
   if (local !== null && local.commit_sha === head) {
     if (local.snapshot_sha256 === cloudSha256) {
       return { kind: "up-to-date", commitSha: head, snapshotSha256: cloudSha256 };
@@ -167,16 +181,17 @@ export async function pullSnapshot(
   // local build would have produced.
   const snapshotsDir = join(baseDir, "snapshots");
   const snapshotPath = join(snapshotsDir, `${head}.json`);
+  const worktreeRoot = join(baseDir, "worktrees", worktreeId);
   try {
     writeFileAtomic(snapshotPath, cloudPayload);
-    writeFileAtomic(join(baseDir, "latest-commit.txt"), `${head}\n`);
+    writeFileAtomic(join(worktreeRoot, "latest-commit.txt"), `${head}\n`);
     writeLastBuild(baseDir, {
       ts: cloudTs,
       commit_sha: head,
       snapshot_sha256: cloudSha256,
       node_count: numOrUndefined(row.node_count),
       edge_count: numOrUndefined(row.edge_count),
-    });
+    }, worktreeId);
     appendHistoryEntry(baseDir, {
       ts: new Date(cloudTs).toISOString(),
       commit_sha: head,
