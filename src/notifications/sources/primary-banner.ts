@@ -35,7 +35,9 @@
 import type { Credentials } from "../../commands/auth-creds.js";
 import type { Notification } from "../types.js";
 import { fetchOrgStats, type OrgStats } from "./org-stats.js";
+import { fetchOpenGoals, formatOpenGoalsLine, type OpenGoalsSummary } from "./open-goals.js";
 import { countUserGeneratedSkills, readUsageRecords, sumMetric } from "../usage-tracker.js";
+import { loadConfig } from "../../config.js";
 import { log as _log } from "../../utils/debug.js";
 
 const log = (msg: string) => _log("notifications-primary-banner", msg);
@@ -119,19 +121,37 @@ export async function pickPrimaryBanner(
     ? bytesToSavedTokens(orgStats.org.memorySearchBytes)
     : localSavedTokens();
 
+  // Open-goals summary runs in parallel — best-effort, never blocks
+  // the banner. A network/auth failure returns null and the banner
+  // renders as before. The memory table name comes from config so
+  // staging / `memory_test` works automatically when env vars set it.
+  let openGoals: OpenGoalsSummary | null = null;
+  try {
+    const cfg = loadConfig();
+    if (cfg?.tableName) {
+      openGoals = await fetchOpenGoals(creds, cfg.tableName);
+    }
+  } catch (e: unknown) {
+    log(`open-goals lookup failed: ${(e as Error).message}`);
+  }
+
   if (tokensSaved > MEANINGFUL_SAVINGS_TOKENS) {
     return orgStats != null
-      ? renderOnlineSavings(sessionId, orgStats, creds.userName)
-      : renderOfflineSavings(sessionId, creds.userName);
+      ? renderOnlineSavings(sessionId, orgStats, creds.userName, openGoals)
+      : renderOfflineSavings(sessionId, creds.userName, openGoals);
   }
-  return renderWelcome(sessionId, creds);
+  return renderWelcome(sessionId, creds, openGoals);
 }
 
 /** "🐝 Welcome back, kamo.aghbalyan / Connected to org mind (workspace default)."
  *  Same content as the prior welcome rule (src/notifications/rules/welcome.ts);
  *  the dedupKey is the only behavior change — session-scoped, refires every
  *  session, rather than savedAt-scoped (which dedup'd until next login). */
-function renderWelcome(sessionId: string, creds: Credentials): Notification {
+function renderWelcome(
+  sessionId: string,
+  creds: Credentials,
+  openGoals: OpenGoalsSummary | null,
+): Notification {
   // Personalization is optional. If creds.userName is missing (malformed
   // credentials.json — rare), drop the comma-clause rather than fall back
   // to a generic "there" that reads awkwardly. If creds.orgName is missing,
@@ -146,9 +166,20 @@ function renderWelcome(sessionId: string, creds: Credentials): Notification {
     id: "welcome",
     severity: "info",
     title,
-    body: `Connected to ${orgPhrase} (workspace ${workspace}).`,
+    body: appendGoals(`Connected to ${orgPhrase} (workspace ${workspace}).`, openGoals),
     dedupKey: { session: sessionId },
   };
+}
+
+/**
+ * Append a one-line goals summary to the banner body when there are
+ * any open goals owned by the current user. Returns the base body
+ * unchanged when there is nothing to show.
+ */
+function appendGoals(body: string, openGoals: OpenGoalsSummary | null): string {
+  const line = formatOpenGoalsLine(openGoals);
+  if (!line) return body;
+  return `${body}\n📌 ${line}`;
 }
 
 /** "🐝 Hivemind has saved your team ~5.2M tokens
@@ -157,6 +188,7 @@ function renderOnlineSavings(
   sessionId: string,
   s: OrgStats,
   userName: string | undefined,
+  openGoals: OpenGoalsSummary | null,
 ): Notification {
   const zOrg = bytesToSavedTokens(s.org.memorySearchBytes);
   const zUser = bytesToSavedTokens(s.user.memorySearchBytes);
@@ -179,7 +211,7 @@ function renderOnlineSavings(
   if (skillsGenerated > 0) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
-  const body = `   ${segments.join(" · ")}`;
+  const body = appendGoals(`   ${segments.join(" · ")}`, openGoals);
 
   return {
     id: "savings-recap",
@@ -196,6 +228,7 @@ function renderOnlineSavings(
 function renderOfflineSavings(
   sessionId: string,
   userName: string | undefined,
+  openGoals: OpenGoalsSummary | null,
 ): Notification {
   const records = readUsageRecords();
   const memorySearchBytes = sumMetric(records, "memorySearchBytes");
@@ -212,7 +245,7 @@ function renderOfflineSavings(
   if (skillsGenerated > 0) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
-  const body = `   ${segments.join(" · ")}`;
+  const body = appendGoals(`   ${segments.join(" · ")}`, openGoals);
 
   return {
     id: "savings-recap",

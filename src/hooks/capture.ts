@@ -23,6 +23,7 @@ import {
 import { bundleDirFromImportMeta, spawnWikiWorker, wikiLog } from "./spawn-wiki-worker.js";
 import { tryStopCounterTrigger } from "../skillify/triggers.js";
 import { tryAutoExtract } from "./auto-extract.js";
+import { tryCommitKpiExtract } from "./commit-kpi-extract.js";
 import { EmbedClient } from "../embeddings/client.js";
 import { embeddingSqlLiteral } from "../embeddings/sql.js";
 import { embeddingsDisabled } from "../embeddings/disable.js";
@@ -209,6 +210,22 @@ async function main(): Promise<void> {
     } else {
       log(`auto-extract failed: ${msg}`);
     }
+  }
+
+  // Commit-driven KPI auto-extract — fires async (fire-and-forget) on
+  // `git commit` in PostToolUse. Disabled when
+  // HIVEMIND_AUTO_KPI_FROM_COMMITS=false. Failures are absorbed; this
+  // MUST NOT interfere with session capture.
+  try {
+    const result = await tryCommitKpiExtract(input, {
+      agent: "claude-code",
+      currentUser: config.userName,
+      cwd: input.cwd,
+      log,
+    });
+    if (result === "emitted") log("commit-kpi-extract: spawned background analyzer");
+  } catch (e: unknown) {
+    log(`commit-kpi-extract failed: ${(e as Error).message ?? String(e)}`);
   }
 
   maybeTriggerPeriodicSummary(input.session_id, input.cwd ?? "", config);
