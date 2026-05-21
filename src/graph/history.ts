@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 
 import type { GraphSnapshot } from "./types.js";
 
-export type SnapshotTrigger = "manual" | "session-end" | "post-commit" | "unknown";
+export type SnapshotTrigger = "manual" | "session-end" | "post-commit" | "pull" | "unknown";
 
 export interface HistoryEntry {
   /** ISO 8601 UTC. */

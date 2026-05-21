@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { getVersion } from "../cli/version.js";
 import { fileContentHash, readCache, writeCache } from "../graph/cache.js";
 import { pushSnapshot } from "../graph/deeplake-push.js";
+import { pullSnapshot } from "../graph/deeplake-pull.js";
 import {
   diffSnapshots,
   loadSnapshotByCommit,
@@ -76,6 +77,13 @@ Usage:
       intact. Snapshots and history are NOT touched (\`rm -rf
       ~/.hivemind/graphs/<key>\` if you really want them gone).
 
+  hivemind graph pull [--cwd <path>]
+      Download the freshest cloud snapshot for HEAD into the local graph
+      dir (any worktree of this user counts). No-op if local already
+      matches cloud sha256 or local was built later than cloud. Requires
+      \`hivemind login\`. Best-effort: any network/auth failure leaves
+      the local files untouched. Disable via HIVEMIND_GRAPH_PULL=0.
+
   hivemind graph --help
       Show this message.
 
@@ -120,6 +128,9 @@ export function runGraphCommand(args: string[]): void | Promise<void> {
   if (sub === "uninstall") {
     runUninstallCommand(args.slice(1));
     return;
+  }
+  if (sub === "pull") {
+    return runPullCommand(args.slice(1));
   }
   console.error(`hivemind graph: unknown subcommand '${sub}'`);
   console.error(USAGE);
@@ -513,6 +524,70 @@ export async function runBuildCommand(args: string[]): Promise<void> {
       break;
     case "error":
       console.warn(`Cloud:         push error (non-fatal): ${pushOutcome.message}`);
+      break;
+  }
+}
+
+// ─── pull subcommand ───────────────────────────────────────────────────────
+
+interface PullOptions {
+  cwd: string;
+}
+
+function parsePullArgs(args: string[]): PullOptions {
+  let cwd = process.cwd();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--cwd" && i + 1 < args.length) {
+      cwd = args[i + 1]!;
+      i += 1;
+    } else if (a === "--help" || a === "-h") {
+      console.log(USAGE);
+      process.exit(0);
+    } else {
+      console.error(`hivemind graph pull: unknown argument '${a}'`);
+      console.error(USAGE);
+      process.exit(2);
+    }
+  }
+  return { cwd };
+}
+
+export async function runPullCommand(args: string[]): Promise<void> {
+  const opts = parsePullArgs(args);
+  const outcome = await pullSnapshot(opts.cwd);
+  switch (outcome.kind) {
+    case "pulled":
+      console.log(`Pulled commit ${outcome.commitSha.slice(0, 7)}`);
+      console.log(`  sha256:  ${outcome.snapshotSha256.slice(0, 12)}...`);
+      console.log(`  bytes:   ${outcome.bytes}`);
+      console.log(`  origin:  worktree_id=${outcome.sourceWorktreePath.slice(0, 16)}`);
+      console.log(`  cloud ts: ${new Date(outcome.cloudTs).toISOString()}`);
+      break;
+    case "up-to-date":
+      console.log(`Already up-to-date (commit ${outcome.commitSha.slice(0, 7)}, sha256 ${outcome.snapshotSha256.slice(0, 12)}...)`);
+      break;
+    case "local-newer":
+      console.log(`Local is newer than cloud — not pulling.`);
+      console.log(`  commit:   ${outcome.commitSha.slice(0, 7)}`);
+      console.log(`  local ts: ${new Date(outcome.localTs).toISOString()}`);
+      console.log(`  cloud ts: ${new Date(outcome.cloudTs).toISOString()}`);
+      break;
+    case "no-cloud-row":
+      console.log(`No cloud snapshot for commit ${outcome.commitSha.slice(0, 7)} — run \`hivemind graph build\` to create one.`);
+      break;
+    case "skipped-no-auth":
+      console.log(`Skipped: not authenticated (run \`hivemind login\`).`);
+      break;
+    case "skipped-disabled":
+      console.log(`Skipped: HIVEMIND_GRAPH_PULL=0.`);
+      break;
+    case "skipped-no-head":
+      console.log(`Skipped: not in a git repo (\`git rev-parse HEAD\` failed).`);
+      break;
+    case "error":
+      console.warn(`Pull error (non-fatal): ${outcome.message}`);
+      process.exitCode = 1;
       break;
   }
 }
