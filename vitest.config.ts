@@ -371,6 +371,7 @@ export default defineConfig({
         "src/graph/extract/typescript.ts":   { statements: 90, branches: 70, functions: 90, lines: 90 },
         "src/graph/snapshot.ts":             { statements: 90, branches: 85, functions: 90, lines: 90 },
         "src/graph/cache.ts":                { statements: 90, branches: 85, functions: 90, lines: 90 },
+        "src/graph/build-lock.ts":           { statements: 85, branches: 75, functions: 90, lines: 85 },
         "src/graph/diff.ts":                 { statements: 90, branches: 80, functions: 90, lines: 90 },
         "src/graph/git-hook-install.ts":     { statements: 85, branches: 75, functions: 90, lines: 85 },
         "src/graph/history.ts":              { statements: 90, branches: 75, functions: 90, lines: 90 },

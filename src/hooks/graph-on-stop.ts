@@ -1,22 +1,26 @@
 /**
  * Auto-build hook for the codebase-graph feature (Phase 1.5).
  *
- * Registered in claude-code/hooks/hooks.json under "SessionEnd" only,
- * with async: true. Why NOT "Stop":
- *   - "Stop" fires after every model turn in interactive sessions, but
- *     `claude -p` (non-interactive) skips it entirely. We need an event
- *     that fires in BOTH modes, and SessionEnd does.
- *   - Registering under both Stop AND SessionEnd creates a race at session
- *     close: Stop fires (async, build starts), SessionEnd fires shortly
- *     after, both processes read the stale .last-build.json (rate-limit
- *     state is only written after the build completes), both decide FIRE,
- *     both run the full build in parallel. Codex review caught this.
- *   - Phase 1.5 has no in-session MCP consumption of the graph (that's
- *     Phase 4), so per-turn freshness has no observable user benefit.
- *     One build at session close is enough.
- *   - When Phase 4 lands and the agent reads the graph mid-session, we can
- *     re-add Stop with proper cross-process locking (or content-hash
- *     dedup before writeSnapshot).
+ * Registered in claude-code/hooks/hooks.json under BOTH "Stop" AND
+ * "SessionEnd" with async: true. Why both:
+ *   - "Stop" fires after every model turn in INTERACTIVE Claude sessions.
+ *     Rate-limit gate (10 min default) keeps the per-turn cost ~5ms in
+ *     the skip path; you get near-real-time graph freshness while coding.
+ *   - "SessionEnd" fires at session close. It's the ONLY end-of-session
+ *     event that fires in `claude -p` non-interactive mode (where Stop
+ *     is skipped). Without this registration `claude -p --plugin-dir`
+ *     would run the agent and exit without ever rebuilding the graph.
+ *
+ * Double-firing race: at session close, Stop fires (async) THEN SessionEnd
+ * fires (async) almost simultaneously. Both processes read the pre-build
+ * .last-build.json and both pass the gate. Without protection, both would
+ * run a full build in parallel.
+ *
+ * Mitigation: cross-process build lock via acquireBuildLock(). Atomic
+ * O_CREAT|O_EXCL on `.build.in-flight`. First-to-acquire runs the build;
+ * the other logs "lock held-by-other" and exits without work. Stale locks
+ * (process crashed mid-build) are auto-recovered after 5 minutes. See
+ * src/graph/build-lock.ts.
  *
  * Common-case workload (when the gate skips):
  *
@@ -45,6 +49,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { runBuildCommand } from "../commands/graph.js";
+import { acquireBuildLock, releaseBuildLock } from "../graph/build-lock.js";
 import { readLastBuild } from "../graph/last-build.js";
 import { repoDir } from "../graph/snapshot.js";
 import { isDirectRun } from "../utils/direct-run.js";
@@ -194,10 +199,31 @@ export function main(): void {
   logToFile(ctx.cwd, `gate: ${decision.fire ? "FIRE" : "SKIP"} (${decision.reason})`);
   if (!decision.fire) return;
 
+  // Cross-process lock: prevents the race where Stop and SessionEnd both
+  // pass the gate (because both read the pre-build .last-build.json) and
+  // start the build in parallel. The first to call acquireBuildLock wins;
+  // the other logs SKIP-held-by-other and exits cheaply.
+  const { key: repoKey } = deriveProjectKey(ctx.cwd);
+  const baseDir = repoDir(repoKey);
+  const lock = acquireBuildLock(baseDir);
+  if (!lock.acquired) {
+    logToFile(ctx.cwd, `build skipped: lock ${lock.reason}`);
+    return;
+  }
+  logToFile(ctx.cwd, `lock: ${lock.reason}`);
+
+  // The trigger label here is what gets recorded in history.jsonl. We use
+  // "session-end" as the canonical name for "an auto-trigger from this
+  // hook" — even though the hook also runs from Stop in interactive mode.
+  // The history entry's value is "what registered hook fired the build",
+  // not "which underlying event"; both feed the same gate + lock so the
+  // distinction is invisible to consumers.
   try {
     runBuildCommand(["--trigger", "session-end"]);
   } catch (err) {
     logToFile(ctx.cwd, `build threw: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    releaseBuildLock(baseDir);
   }
 }
 
