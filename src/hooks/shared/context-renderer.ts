@@ -116,8 +116,19 @@ export async function renderContextBlock(
         status: "active",
         limit: Math.max(maxTasks * 4, maxTasks + 1),
       });
+      // Codex legacy audit pass 3 (P1.A): use the STRICT 'me' scope
+      // so listTasks filters to (scope='me' AND assigned_to=current)
+      // BEFORE the limit slice. The earlier post-fetch
+      // `myTasks.filter(t => t.scope === 'me')` ran AFTER listTasks
+      // had already sorted + sliced its mixed-scope result; a user
+      // with many newer team-scope tasks assigned to them could
+      // still see older personal tasks evicted from the cap window
+      // and never make it into `myTasks` at all. Pushing the filter
+      // into the query closes that gap. The listTasks 'mine' contract
+      // is unchanged — CLI consumers like `hivemind tasks list --mine`
+      // still see the full union.
       myTasks = await listTasks(query, input.tasksTable, {
-        scope: "mine",
+        scope: "me",
         status: "active",
         current_user: input.currentUser,
         limit: Math.max(maxTasks * 4, maxTasks + 1),
@@ -127,24 +138,7 @@ export async function renderContextBlock(
       log(`render-context-block: tasks unavailable (continuing): ${tmsg}`);
       // teamTasks / myTasks stay [] — block still renders any rules.
     }
-    // Codex legacy audit pass 2 (P1.2): listTasks(scope="mine")
-    // returns every row where assigned_to=current_user, regardless of
-    // the row's scope. That means a team-scope task assigned to the
-    // current user lands in BOTH `teamTasks` and `myTasks` (fine,
-    // merge dedups) — BUT if there are many newer team-scope tasks
-    // not assigned to current user, the team-scope-but-assigned-to-me
-    // task gets pushed out of the team-side cap window AND duplicated
-    // into the mine bucket, where it can in turn squeeze out genuine
-    // personal me-scope tasks. Net effect: a user with many team
-    // tasks loses visibility on their personal me-scope tasks.
-    //
-    // Fix: scope the renderer's "mine" bucket to me-scope rows only.
-    // Team-scope tasks assigned to current user remain visible via
-    // the team query (with ★YOU highlight). The listTasks API
-    // contract is unchanged — CLI consumers like `hivemind tasks
-    // list --mine` still see the full union.
-    const myPersonalTasks = myTasks.filter(t => t.scope === "me");
-    const visibleTasks = mergeAndDedupTasks(teamTasks, myPersonalTasks);
+    const visibleTasks = mergeAndDedupTasks(teamTasks, myTasks);
 
     const rulesShown = rules.slice(0, maxRules);
     const rulesHidden = Math.max(0, rules.length - maxRules);
@@ -189,16 +183,25 @@ export async function renderContextBlock(
 
 /**
  * Merge team-scope and me-scope task results into a single deduped
- * list sorted newest-first by created_at. The two listTasks calls
- * may return the same task_id (a team task assigned to current user
- * shows up in both).
+ * list. The two listTasks calls may return the same task_id when a
+ * team task is assigned to current_user (the team query covers all
+ * team rows; the mine query, with strict scope='me', no longer
+ * returns that same row — but the dedup defensively guards against
+ * any future loosening of the query contract).
  *
- * On collision the HIGHEST-VERSION row wins (codex legacy audit:
- * the team query fires first, then mine; if a task is edited
- * between the two queries, mine sees the newer version. Keeping the
- * older team-side copy would inject stale text/KPIs into the
- * SessionStart context). Ties on version break by newer
- * created_at — same tie-break as listRules / listTasks.
+ * On collision the HIGHEST-VERSION row wins (codex legacy audit: if
+ * a task is edited between the two SELECTs, the second query may
+ * see a newer version. Keeping the older copy would inject stale
+ * text/KPIs into the SessionStart context.) Ties on version break
+ * by newer created_at — same tie-break as listRules / listTasks.
+ *
+ * Sort order — codex legacy audit pass 3 P1.A: me-scope tasks come
+ * FIRST in the merged list (then newest-first by created_at within
+ * each scope group). The downstream cap slice can otherwise evict a
+ * user's small handful of personal todos when many newer team-scope
+ * tasks are also assigned to them. Reserving the front of the list
+ * for me-scope makes the SessionStart context honor what the user
+ * needs to see ahead of team context.
  */
 function mergeAndDedupTasks(
   teamTasks: import("../../tasks/index.js").TaskRow[],
@@ -218,7 +221,15 @@ function mergeAndDedupTasks(
     }
   }
   const merged = [...winner.values()];
-  merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  merged.sort((a, b) => {
+    // Me-scope first: a personal todo cannot be evicted from the
+    // SessionStart cap window by newer team-scope tasks.
+    const aMe = a.scope === "me" ? 0 : 1;
+    const bMe = b.scope === "me" ? 0 : 1;
+    if (aMe !== bMe) return aMe - bMe;
+    // Within each scope group, newest-first.
+    return b.created_at.localeCompare(a.created_at);
+  });
   return merged;
 }
 

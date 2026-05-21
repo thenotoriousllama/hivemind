@@ -407,6 +407,30 @@ describe("listTasks", () => {
     expect(rows).toEqual([]);
   });
 
+  it("scope='me' filters to strict (scope==='me' AND assigned_to=current_user) — codex legacy audit pass 3 P1.A", async () => {
+    // 'me' is the strict variant used by the SessionStart renderer:
+    // a team-scope task assigned to current_user is NOT included.
+    const { query } = mockQuery([
+      () => [
+        fakeRow({ task_id: "A", scope: "me", assigned_to: "alice@activeloop.ai" }),
+        fakeRow({ task_id: "B", scope: "team", assigned_to: "alice@activeloop.ai" }),
+        fakeRow({ task_id: "C", scope: "me", assigned_to: "bob@activeloop.ai" }),
+      ],
+    ]);
+    const rows = await listTasks(query, TBL, { scope: "me", current_user: "alice@activeloop.ai" });
+    expect(rows.map(r => r.task_id)).toEqual(["A"]);
+  });
+
+  it("scope='me' returns [] when current_user is omitted (same over-disclosure guard as 'mine')", async () => {
+    const { query } = mockQuery([
+      () => [
+        fakeRow({ task_id: "A", scope: "me", assigned_to: "alice@activeloop.ai" }),
+      ],
+    ]);
+    const rows = await listTasks(query, TBL, { scope: "me" });
+    expect(rows).toEqual([]);
+  });
+
   it("scope='team' filters to scope==='team'", async () => {
     const { query } = mockQuery([
       () => [

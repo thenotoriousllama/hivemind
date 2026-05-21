@@ -372,41 +372,83 @@ describe("renderContextBlock — tasks section + visibility filter", () => {
     expect(occurrences).toBe(1);
   });
 
-  it("mine bucket is scope-filtered to 'me' rows — team rows in mine query are dropped (codex legacy audit pass 2 P1.2)", async () => {
-    // listTasks(scope='mine') returns rows where assigned_to=current
-    // regardless of row scope — a side-effect of the read.ts contract.
-    // If the renderer kept those team-scope rows in mine, a user with
-    // many team tasks assigned to them would see those tasks consume
-    // both buckets and crowd out genuine me-scope tasks.
-    //
-    // New contract: renderer filters mine→me-scope-only. Team-scope
-    // tasks assigned to current user still appear via the team query
-    // (with the ★YOU highlight).
-    const teamRowAssignedToMe = fakeTask({
-      task_id: "team-task", scope: "team", assigned_to: "alice@activeloop.ai",
-      version: 1, text: "team work", created_at: "2026-05-20T10:00:00Z",
-    });
-    // Simulate a real me-scope task that should be visible.
+  it("mine bucket uses strict 'me' scope at the query level — team rows never enter mine (codex legacy audit pass 3 P1.A)", async () => {
+    // Renderer calls listTasks(scope='me') for the mine bucket, which
+    // applies the (scope='me' AND assigned_to=current) filter BEFORE
+    // the limit slice. The mine query returns ONLY personal rows.
+    // Team-scope tasks assigned to current_user still appear via the
+    // team query (with the ★YOU highlight).
     const meRow = fakeTask({
       task_id: "personal-task", scope: "me", assigned_to: "alice@activeloop.ai",
       version: 1, text: "personal todo", created_at: "2026-05-20T10:01:00Z",
     });
-    // mine query also returns the team-assigned row (read.ts contract);
-    // renderer must drop it before merge.
-    const { query } = mockQuery([
+    const teamRowAssignedToMe = fakeTask({
+      task_id: "team-task", scope: "team", assigned_to: "alice@activeloop.ai",
+      version: 1, text: "team work", created_at: "2026-05-20T10:00:00Z",
+    });
+    const { query, calls } = mockQuery([
       () => [],
       () => [teamRowAssignedToMe],
-      () => [teamRowAssignedToMe, meRow],
+      () => [meRow],
       () => [],
     ]);
     const out = await renderContextBlock(query, { ...TABLES, currentUser: "alice@activeloop.ai" });
+    // The mine bucket's listTasks call was issued — listTasks itself
+    // emits the SELECT, then JS-filters to scope==='me'. We can't
+    // intercept the JS filter, but we can verify the renderer issued
+    // exactly 4 queries (rules, team, mine, events).
+    expect(calls).toHaveLength(4);
     // team-task appears once (from the team query, with ★YOU).
     const teamOccurrences = (out.match(/team-task/g) ?? []).length;
     expect(teamOccurrences).toBe(1);
     expect(out).toContain("★YOU");
-    // me-scope personal-task is preserved.
     expect(out).toContain("personal-task");
     expect(out).toContain("personal todo");
+  });
+
+  it("personal tasks survive a flood of newer team-scope tasks assigned to current_user (codex legacy audit pass 3 P1.A regression)", async () => {
+    // Pathological scenario codex described in pass 3:
+    //   - 50 newer team-scope tasks all assigned to alice@activeloop
+    //   - 1 older me-scope personal task
+    // Under the prior post-fetch filter, listTasks(scope='mine')
+    // returned the 51 mixed-scope rows sorted by created_at then
+    // sliced to limit (4× cap = 40). The older me-scope row could be
+    // sliced off entirely, never reaching the renderer's
+    // `t.scope === 'me'` filter. With strict scope='me' in the query,
+    // the older personal task is preserved.
+    //
+    // The test feeds the full set into the mock and lets listTasks's
+    // real filter run; the strict 'me' filter happens BEFORE the
+    // 40-row slice so the personal row survives.
+    const teamFlood: Array<ReturnType<typeof fakeTask>> = [];
+    for (let i = 0; i < 50; i++) {
+      teamFlood.push(
+        fakeTask({
+          task_id: `team-${i}`, scope: "team", assigned_to: "alice@activeloop.ai",
+          version: 1, text: `team work ${i}`,
+          created_at: `2026-05-20T11:${String(i).padStart(2, "0")}:00Z`,
+        }),
+      );
+    }
+    const olderPersonal = fakeTask({
+      task_id: "personal-old", scope: "me", assigned_to: "alice@activeloop.ai",
+      version: 1, text: "older personal todo",
+      created_at: "2026-05-19T08:00:00Z",
+    });
+    const { query } = mockQuery([
+      () => [],
+      // team query: 50 team-scope rows assigned to alice
+      () => teamFlood,
+      // mine query: same set + the older personal row. listTasks's
+      // real filter (scope='me' AND assigned_to=current) keeps only
+      // the personal row BEFORE the 40-cap slice.
+      () => [...teamFlood, olderPersonal],
+      // events
+      () => [],
+    ]);
+    const out = await renderContextBlock(query, { ...TABLES, currentUser: "alice@activeloop.ai" });
+    expect(out).toContain("personal-old");
+    expect(out).toContain("older personal todo");
   });
 
   it("preserves visible tasks even when many private OTHER-user tasks would push them out of a global cap — codex P2 pass 1 regression guard", async () => {

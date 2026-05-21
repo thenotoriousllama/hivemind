@@ -34,11 +34,16 @@ export interface TaskRow {
   plugin_version: string;
 }
 
-export type ScopeFilter = "mine" | "team" | "all";
+export type ScopeFilter = "mine" | "me" | "team" | "all";
 
 export interface ListTasksOpts {
   /**
    * 'mine'  = rows where assigned_to == currentUser (across both scopes)
+   * 'me'    = rows where scope == 'me' AND assigned_to == currentUser
+   *           (strict personal — the SessionStart renderer's mine bucket
+   *            uses this so older personal tasks are never evicted by
+   *            newer team-scope tasks assigned to current_user before
+   *            the limit slice. Codex legacy audit pass 3 P1.A)
    * 'team'  = rows where scope == 'team' (no assignee filter)
    * 'all'   = no filter (both scopes, every assignee)
    * default = 'all' (caller is expected to pass a value at the CLI layer).
@@ -46,7 +51,7 @@ export interface ListTasksOpts {
   scope?: ScopeFilter;
   /** Filter by status. Default 'active'. */
   status?: "active" | "done" | "all";
-  /** Required when scope='mine'. Ignored otherwise. */
+  /** Required when scope='mine' or scope='me'. Ignored otherwise. */
   current_user?: string;
   /** Max rows returned. Default 10 — matches the SessionStart inject cap. */
   limit?: number;
@@ -93,6 +98,15 @@ export async function listTasks(
       // (silent over-disclosure is worse than an empty list).
       if (!current) return false;
       return row.assigned_to === current;
+    }
+    if (scope === "me") {
+      // Strict personal: row scope must be 'me' AND assigned to current
+      // user. Used by the SessionStart renderer's mine bucket so newer
+      // team-scope tasks assigned to current_user can never push older
+      // personal tasks out of the cap window. Same "no broadening on
+      // missing user" rule as 'mine'.
+      if (!current) return false;
+      return row.scope === "me" && row.assigned_to === current;
     }
     if (scope === "team") return row.scope === "team";
     return true;
