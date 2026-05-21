@@ -69,10 +69,16 @@ describe("parseDashboardArgs", () => {
     expect(parseDashboardArgs(["--serve", "--port=9000"]).args?.port).toBe(9000);
   });
   it("rejects non-integer / out-of-range ports", () => {
-    expect(parseDashboardArgs(["--port", "abc"]).error).toMatch(/--port must be an integer/);
-    expect(parseDashboardArgs(["--port", "-1"]).error).toMatch(/--port requires a value/); // - prefix triggers earlier guard
-    expect(parseDashboardArgs(["--port=70000"]).error).toMatch(/--port must be an integer/);
-    expect(parseDashboardArgs(["--port="]).error).toMatch(/--port requires a value/);
+    expect(parseDashboardArgs(["--serve", "--port", "abc"]).error).toMatch(/--port must be an integer/);
+    expect(parseDashboardArgs(["--serve", "--port", "-1"]).error).toMatch(/--port requires a value/); // - prefix triggers earlier guard
+    expect(parseDashboardArgs(["--serve", "--port=70000"]).error).toMatch(/--port must be an integer/);
+    expect(parseDashboardArgs(["--serve", "--port="]).error).toMatch(/--port requires a value/);
+  });
+  it("rejects --port unless --serve is also passed (codex review on serve commit)", () => {
+    expect(parseDashboardArgs(["--port", "9000"]).error).toMatch(/--port requires --serve/);
+    expect(parseDashboardArgs(["--port=9000"]).error).toMatch(/--port requires --serve/);
+    // sanity: with --serve it parses cleanly
+    expect(parseDashboardArgs(["--serve", "--port", "9000"]).error).toBeUndefined();
   });
 });
 

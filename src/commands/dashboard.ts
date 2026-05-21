@@ -148,6 +148,15 @@ export function parseDashboardArgs(args: string[]): ParseResult {
     return { error: `unknown arg '${a}'` };
   }
 
+  // --port is meaningful only in --serve mode. Accepting it silently
+  // without --serve produced confusing no-ops (`hivemind dashboard
+  // --port 9000` looked like it should start a server). Codex review
+  // on the --serve commit caught this — reject explicitly so the user
+  // sees the misconfiguration.
+  if (port !== undefined && !serve) {
+    return { error: "--port requires --serve" };
+  }
+
   return {
     args: {
       cwd: cwd ?? process.cwd(),
