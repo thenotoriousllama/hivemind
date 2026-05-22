@@ -9,9 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   countLocalManifestEntries,
+  getLatestInsightEntry,
   readLocalManifest,
   writeLocalManifest,
   type LocalManifest,
+  type LocalManifestEntry,
 } from "../../src/skillify/local-manifest.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "local-manifest-test-"));
@@ -90,5 +92,104 @@ describe("readLocalManifest", () => {
     const nested = join(TMP, "a", "b", "c", "manifest.json");
     writeLocalManifest(makeManifest(1), nested);
     expect(readLocalManifest(nested)?.entries).toHaveLength(1);
+  });
+
+  it("round-trips the `insight` field on entries that carry one", () => {
+    // Schema-extension guard: writing an entry with an `insight` string
+    // must survive write → read. Without this, downstream callers
+    // (SessionStart banner) get the entry but `.insight` comes back
+    // undefined → silent fallback to count surface.
+    const path = manifestPath("insight-roundtrip");
+    const entry: LocalManifestEntry = {
+      skill_name: "verify-before-done",
+      canonical_path: "/x/SKILL.md",
+      symlinks: [],
+      source_session_ids: ["sid"],
+      source_session_paths: ["/x/sid.jsonl"],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-22T00:00:00.000Z",
+      uploaded: false,
+      insight: "You revisited 4 merged PRs in the last month because tests weren't run.",
+    };
+    writeLocalManifest({ created_at: "2026-05-22T00:00:00.000Z", entries: [entry] }, path);
+    const read = readLocalManifest(path);
+    expect(read!.entries[0].insight).toBe(entry.insight);
+  });
+});
+
+describe("getLatestInsightEntry", () => {
+  it("returns null when the manifest is missing", () => {
+    expect(getLatestInsightEntry(manifestPath("nope-insight"))).toBeNull();
+  });
+
+  it("returns null when no entry carries an insight (legacy manifest)", () => {
+    // Pre-insight manifest: every entry lacks `insight`. Accessor must
+    // return null so the banner falls back to the count-only surface
+    // instead of rendering an `undefined` interpolation.
+    const path = manifestPath("legacy");
+    writeLocalManifest(makeManifest(3), path);
+    expect(getLatestInsightEntry(path)).toBeNull();
+  });
+
+  it("returns null when entries' insight strings are all empty / whitespace", () => {
+    // Belt-and-suspenders: parseMultiVerdict already collapses empty
+    // strings to undefined, but a hand-edited or future-format manifest
+    // could still carry an empty insight. Accessor treats empty/whitespace
+    // as "no insight" so the banner doesn't render a vacuous line.
+    const path = manifestPath("empty-insights");
+    const m = makeManifest(2);
+    m.entries[0].insight = "";
+    m.entries[1].insight = "   \t  ";
+    writeLocalManifest(m, path);
+    expect(getLatestInsightEntry(path)).toBeNull();
+  });
+
+  it("picks the most recent insight-bearing entry across mixed entries", () => {
+    // Mixed manifest: some entries have insight, some don't. We must
+    // return the one with the highest created_at AMONG insight-bearing
+    // entries — not the most recent overall (which might lack insight).
+    const path = manifestPath("mixed");
+    const m = makeManifest(0);
+    m.entries.push({
+      skill_name: "old-with-insight",
+      canonical_path: "/x/old/SKILL.md",
+      symlinks: [],
+      source_session_ids: ["s1"],
+      source_session_paths: ["/x/s1.jsonl"],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-10T00:00:00.000Z",
+      uploaded: false,
+      insight: "Old insight.",
+    });
+    m.entries.push({
+      skill_name: "newer-without-insight",
+      canonical_path: "/x/new/SKILL.md",
+      symlinks: [],
+      source_session_ids: ["s2"],
+      source_session_paths: ["/x/s2.jsonl"],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-21T00:00:00.000Z",
+      uploaded: false,
+    });
+    m.entries.push({
+      skill_name: "newest-with-insight",
+      canonical_path: "/x/newest/SKILL.md",
+      symlinks: [],
+      source_session_ids: ["s3"],
+      source_session_paths: ["/x/s3.jsonl"],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-22T00:00:00.000Z",
+      uploaded: false,
+      insight: "Newest insight.",
+    });
+    writeLocalManifest(m, path);
+    const latest = getLatestInsightEntry(path);
+    expect(latest).not.toBeNull();
+    expect(latest!.skill_name).toBe("newest-with-insight");
+    expect(latest!.insight).toBe("Newest insight.");
   });
 });

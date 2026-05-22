@@ -208,11 +208,26 @@ function buildSessionPrompt(pairs: Pair[], session: SessionFile, verdictPath: st
     `- A skill qualifies if it captures a concrete, repeatable workflow OR a non-obvious`,
     `  constraint/gotcha a future engineer would benefit from knowing. Intra-session is fine —`,
     `  one deep dive yielding a generalizable takeaway counts.`,
+    `- Especially valuable: REPEATABLE-MISTAKE patterns. Cases where the assistant declared`,
+    `  work "done"/"fixed"/"verified" and the user came back to the same problem later; where`,
+    `  the same class of mistake recurs (forgot to run tests, mishandled async state,`,
+    `  hallucinated function/file existence, re-asked for confirmation on already-authorized`,
+    `  work, jumped to plans without checking with the user, etc.); where the user manually`,
+    `  corrected the same kind of error >1 time. These are the highest-value catches.`,
     `- Skip patterns that are obvious from reading the codebase or already in CLAUDE.md.`,
     `- Each body uses short sections (When to use, Workflow, Anti-patterns), concrete commands`,
     `  / paths / snippets drawn from the exchanges below, no marketing, no emojis.`,
     `- Each body under ~3000 characters.`,
     `- Skill names are kebab-case slugs (lowercase letters/digits/hyphens only).`,
+    `- For each skill, also emit a one-line "insight": a concrete, quantified, second-person`,
+    `  sentence describing what hivemind found that prompted the skill. Examples:`,
+    `    "You revisited 4 merged PRs in the last month because the assistant declared 'done'`,
+    `     before checking test output."`,
+    `    "You corrected the same env-mismatch (beta vs prod) twice in the same week before`,
+    `     deciding to switch deployment targets."`,
+    `  The insight is what users will see at next SessionStart, so it must be honest — only`,
+    `  assert counts and patterns you can ground in THIS session's exchanges. Omit the field`,
+    `  if you cannot write a concrete, quantified line.`,
     ``,
     `=== EXCHANGES (user prompts + assistant final answers, tool calls stripped) ===`,
     renderPairsBlock(pairs),
@@ -231,7 +246,8 @@ function buildSessionPrompt(pairs: Pair[], session: SessionFile, verdictPath: st
     `      "name": "<kebab-case>",`,
     `      "description": "<one-line>",`,
     `      "trigger": "<short trigger>",`,
-    `      "body": "<full SKILL.md body without frontmatter>"`,
+    `      "body": "<full SKILL.md body without frontmatter>",`,
+    `      "insight": "<one-line, concrete + quantified + second person; OPTIONAL>"`,
     `    },`,
     `    ... up to 3 entries, or [] if nothing qualifies`,
     `  ]`,
@@ -246,6 +262,13 @@ export interface MinedSkill {
   description: string;
   trigger?: string;
   body: string;
+  /**
+   * One-line user-facing sentence describing what the gate found in the
+   * source session. Surfaced by the SessionStart banner when this skill is
+   * the most-recent insight-bearing entry. Optional — the gate omits it
+   * when it cannot ground a concrete + quantified line.
+   */
+  insight?: string;
 }
 
 export interface MultiVerdict {
@@ -275,8 +298,14 @@ export function parseMultiVerdict(raw: string): MultiVerdict | null {
     const description = typeof s.description === "string" ? s.description.trim() : "";
     const body = typeof s.body === "string" ? s.body.trim() : "";
     const trigger = typeof s.trigger === "string" ? s.trigger.trim() : undefined;
+    // Insight is optional — the gate omits it when it can't ground a
+    // concrete + quantified line. Empty / whitespace-only strings collapse
+    // to undefined so the manifest entry stays free of an empty-string
+    // sentinel that downstream code would treat as "present".
+    const rawInsight = typeof s.insight === "string" ? s.insight.trim() : "";
+    const insight = rawInsight.length > 0 ? rawInsight : undefined;
     if (!name || !body) continue;
-    out.push({ name, description, body, trigger });
+    out.push({ name, description, body, trigger, insight });
   }
   return { reason: typeof parsed.reason === "string" ? parsed.reason : undefined, skills: out };
 }
@@ -649,6 +678,11 @@ async function runMineLocalImpl(args: string[]): Promise<void> {
       gate_agent: gateAgent,
       created_at: result.createdAt,
       uploaded: false,
+      // Persist the one-line insight when the gate produced one. Omitted
+      // (undefined → absent in JSON) when the gate couldn't ground a
+      // concrete line, so the SessionStart banner falls back to the
+      // count-only surface for entries written before this field landed.
+      ...(skill.insight ? { insight: skill.insight } : {}),
     }));
     saveManifest({
       created_at: existing?.created_at ?? new Date().toISOString(),

@@ -195,4 +195,66 @@ describe("parseMultiVerdict", () => {
     expect(mv!.skills).toHaveLength(1);
     expect(mv!.skills[0].name).toBe("kept");
   });
+
+  it("picks up `insight` when present and trims it", () => {
+    const raw = JSON.stringify({
+      reason: "ok",
+      skills: [
+        {
+          name: "verify-before-done",
+          description: "verify before declaring done",
+          body: "## body",
+          insight: "  You revisited 4 merged PRs because tests weren't run before merge.  ",
+        },
+      ],
+    });
+    const mv = parseMultiVerdict(raw);
+    expect(mv!.skills[0].insight).toBe(
+      "You revisited 4 merged PRs because tests weren't run before merge.",
+    );
+  });
+
+  it("omits `insight` when missing entirely", () => {
+    // Cover the absence branch — manifest entry must persist `undefined`,
+    // not an empty string sentinel, so the SessionStart banner falls back
+    // cleanly to the count surface for entries that don't carry an insight.
+    const raw = JSON.stringify({
+      reason: "ok",
+      skills: [{ name: "k", description: "d", body: "b" }],
+    });
+    const mv = parseMultiVerdict(raw);
+    expect(mv!.skills[0].insight).toBeUndefined();
+  });
+
+  it("collapses empty / whitespace-only insight to undefined", () => {
+    // Anti-pattern guard: an empty-string insight would still satisfy
+    // `typeof s.insight === "string"` in the manifest write site and leak
+    // a vacuous entry into the SessionStart banner. parseMultiVerdict
+    // normalizes both empty and pure-whitespace inputs to undefined.
+    const raw = JSON.stringify({
+      reason: "ok",
+      skills: [
+        { name: "a", description: "x", body: "y", insight: "" },
+        { name: "b", description: "x", body: "y", insight: "    " },
+      ],
+    });
+    const mv = parseMultiVerdict(raw);
+    expect(mv!.skills).toHaveLength(2);
+    expect(mv!.skills[0].insight).toBeUndefined();
+    expect(mv!.skills[1].insight).toBeUndefined();
+  });
+
+  it("ignores non-string insight values", () => {
+    const raw = JSON.stringify({
+      reason: "ok",
+      skills: [
+        { name: "k", description: "x", body: "y", insight: 42 },
+        { name: "l", description: "x", body: "y", insight: { wat: "no" } },
+        { name: "m", description: "x", body: "y", insight: ["array"] },
+      ],
+    });
+    const mv = parseMultiVerdict(raw);
+    expect(mv!.skills).toHaveLength(3);
+    for (const s of mv!.skills) expect(s.insight).toBeUndefined();
+  });
 });

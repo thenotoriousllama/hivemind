@@ -35,6 +35,16 @@ export interface LocalManifestEntry {
   created_at: string;
   /** False until a future `push-local` flow uploads the row to the org table. */
   uploaded: boolean;
+  /**
+   * One-line user-facing insight emitted by the gate alongside the skill —
+   * concrete and counted, addressed to the user in second person ("You
+   * revisited 4 merged PRs in the last month..."). Surfaced by the
+   * SessionStart banner when present so unauthenticated users see a real
+   * finding instead of an abstract skill count. Optional for backward
+   * compatibility — entries written before this field landed parse fine
+   * and fall back to the count-only banner.
+   */
+  insight?: string;
 }
 
 export interface LocalManifest {
@@ -81,4 +91,30 @@ export function countLocalManifestEntries(path: string = LOCAL_MANIFEST_PATH): n
   // Defend against malformed manifests where `entries` is present but not
   // an array (e.g. a string like "oops" would otherwise leak `.length`).
   return Array.isArray(m?.entries) ? m!.entries.length : 0;
+}
+
+/**
+ * Return the most recent manifest entry that has a non-empty `insight`, or
+ * null when none exists. "Most recent" = highest `created_at` ISO timestamp
+ * among entries that carry an insight (we don't assume manifest order).
+ *
+ * Powers the SessionStart concrete-insight banner: when the gate produced a
+ * quantified user-facing finding, we surface that instead of the generic
+ * count. Returns null cleanly for legacy manifests written before the
+ * `insight` field landed, so the banner can fall back to the count surface
+ * without branching on a sentinel.
+ */
+export function getLatestInsightEntry(
+  path: string = LOCAL_MANIFEST_PATH,
+): LocalManifestEntry | null {
+  const m = readLocalManifest(path);
+  if (!m || !Array.isArray(m.entries)) return null;
+  let best: LocalManifestEntry | null = null;
+  for (const e of m.entries) {
+    if (!e || typeof e.insight !== "string" || e.insight.trim().length === 0) continue;
+    if (!best || (e.created_at ?? "") > (best.created_at ?? "")) {
+      best = e;
+    }
+  }
+  return best;
 }
