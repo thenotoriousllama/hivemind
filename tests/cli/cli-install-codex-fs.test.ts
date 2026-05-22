@@ -237,6 +237,102 @@ describe("installCodex — happy path", () => {
     const { installCodex } = await importInstaller();
     expect(() => installCodex()).toThrow(/Codex bundle missing/);
   });
+
+  it("strips a non-canonical hivemind hook entry (sibling dev-clone leftover) and warns about it", async () => {
+    // Realistic dual-install fixture: a previous `npm link` of a hivemind dev
+    // clone left a SessionStart hook pointing at /tmp/old-clone instead of
+    // the canonical ~/.codex/hivemind. installCodex must recognise that as
+    // ours-but-foreign, strip it, and surface what it stripped to stderr.
+    const foreignCmd = `node "/tmp/old-clone/codex/bundle/session-start.js"`;
+    writeFileSync(
+      join(tmpHome, ".codex", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{ type: "command", command: foreignCmd, timeout: 120 }] }],
+        },
+      }),
+    );
+
+    const stderrCalls: string[] = [];
+    // Re-spy so we can read what reportForeignHivemindHooks wrote.
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrCalls.push(typeof chunk === "string" ? chunk : String(chunk));
+      return true;
+    });
+
+    const { installCodex } = await importInstaller();
+    installCodex();
+
+    const hooks = JSON.parse(readFileSync(join(tmpHome, ".codex", "hooks.json"), "utf-8"));
+    // SessionStart has exactly one entry — the canonical one — and the
+    // foreign /tmp/old-clone path is gone.
+    expect(hooks.hooks.SessionStart).toHaveLength(1);
+    const cmd = hooks.hooks.SessionStart[0].hooks[0].command;
+    expect(cmd).toContain(`${tmpHome}/.codex/hivemind/bundle/session-start.js`);
+    expect(cmd).not.toContain("/tmp/old-clone");
+
+    const warns = stderrCalls.join("");
+    expect(warns).toContain("non-canonical path");
+    expect(warns).toContain(foreignCmd);
+  });
+
+  it("does NOT classify an entry as foreign when its hooks[] contains a malformed sibling element", async () => {
+    // Edge case: an entry whose hooks[] mixes one canonical hivemind hook
+    // with garbage (a null entry, a hook with a non-string command). The
+    // canonical hook is recognised — so the entry is hivemind and gets
+    // stripped — but the malformed siblings short-circuit the "is foreign"
+    // check, so we must NOT report this entry as a non-canonical dev clone.
+    const canonicalForeignCmd = `node "/opt/other-install/codex/bundle/capture.js"`;
+    const otherForeignCmd     = `node "/opt/other-install/codex/bundle/pre-tool-use.js"`;
+    writeFileSync(
+      join(tmpHome, ".codex", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          // Order matters: `.every()` short-circuits on the first false, so
+          // we need two events to reach BOTH malformed branches —
+          // PostToolUse exercises the null guard (h is null), PreToolUse
+          // exercises the non-string command guard (typeof cmd !== "string").
+          PostToolUse: [{
+            hooks: [
+              { type: "command", command: canonicalForeignCmd, timeout: 15 },
+              null,
+            ],
+          }],
+          PreToolUse: [{
+            hooks: [
+              { type: "command", command: otherForeignCmd, timeout: 15 },
+              { type: "command", command: 12345 },
+            ],
+          }],
+        },
+      }),
+    );
+
+    const stderrCalls: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrCalls.push(typeof chunk === "string" ? chunk : String(chunk));
+      return true;
+    });
+
+    const { installCodex } = await importInstaller();
+    installCodex();
+
+    const hooks = JSON.parse(readFileSync(join(tmpHome, ".codex", "hooks.json"), "utf-8"));
+    // Stripped from both events — only our canonical entries remain.
+    expect(hooks.hooks.PostToolUse).toHaveLength(1);
+    expect(hooks.hooks.PreToolUse).toHaveLength(1);
+    expect(hooks.hooks.PostToolUse[0].hooks[0].command)
+      .toContain(`${tmpHome}/.codex/hivemind/bundle/capture.js`);
+    expect(hooks.hooks.PreToolUse[0].hooks[0].command)
+      .toContain(`${tmpHome}/.codex/hivemind/bundle/pre-tool-use.js`);
+
+    // And: no foreign warning, because neither entry passed isForeign (the
+    // malformed siblings made `.every()` return false in both).
+    const warns = stderrCalls.join("");
+    expect(warns).not.toContain("non-canonical path");
+    expect(warns).not.toContain(canonicalForeignCmd);
+    expect(warns).not.toContain(otherForeignCmd);
+  });
 });
 
 describe("uninstallCodex", () => {
@@ -257,6 +353,32 @@ describe("uninstallCodex", () => {
   it("is a no-op when there's nothing to remove (cold uninstall)", async () => {
     const { uninstallCodex } = await importInstaller();
     expect(() => uninstallCodex()).not.toThrow();
+  });
+
+  it("preserves a non-hivemind hook during uninstall: rewrites hooks.json instead of deleting it", async () => {
+    // Install hivemind, then mix in a user-owned hook that shares an event
+    // with us. Uninstall must strip our entries but keep the user's, which
+    // exercises the writeJson branch (hooks.json survives) rather than the
+    // unlinkSync branch (hooks.json deleted because nothing else is left).
+    const { installCodex, uninstallCodex } = await importInstaller();
+    installCodex();
+    const hooksPath = join(tmpHome, ".codex", "hooks.json");
+    const cfg = JSON.parse(readFileSync(hooksPath, "utf-8"));
+    const userHook = { hooks: [{ type: "command", command: "/usr/local/bin/audit.sh", timeout: 5 }] };
+    cfg.hooks.PostToolUse.push(userHook);
+    cfg.version = 9;
+    writeFileSync(hooksPath, JSON.stringify(cfg));
+
+    uninstallCodex();
+
+    expect(existsSync(hooksPath)).toBe(true);
+    const after = JSON.parse(readFileSync(hooksPath, "utf-8"));
+    expect(after.hooks.PostToolUse).toHaveLength(1);
+    expect(after.hooks.PostToolUse[0]).toEqual(userHook);
+    // Top-level metadata is preserved through the rewrite.
+    expect(after.version).toBe(9);
+    // Hivemind-only events lose their entries entirely.
+    expect(after.hooks.SessionStart ?? []).toHaveLength(0);
   });
 
   it("uninstall on a malformed hooks.json deletes the file rather than crashing", async () => {
