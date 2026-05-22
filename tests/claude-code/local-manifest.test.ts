@@ -145,6 +145,104 @@ describe("getLatestInsightEntry", () => {
     expect(getLatestInsightEntry(path)).toBeNull();
   });
 
+  it("returns null when manifest exists but entries is not an array (malformed file)", () => {
+    // Defensive branch: a hand-edited manifest could swap `entries` from
+    // an array to a string/object. Accessor must coerce that to null
+    // rather than throw inside the for...of loop.
+    const path = manifestPath("entries-not-array-insight");
+    writeFileSync(path, JSON.stringify({ created_at: "x", entries: "oops" }));
+    expect(getLatestInsightEntry(path)).toBeNull();
+  });
+
+  it("skips null / non-object entries inside the array", () => {
+    // Mirrors parseMultiVerdict's defensive `if (!e || typeof e !== "object")`
+    // check — guards against a manifest where an entry was set to null,
+    // a string, or otherwise non-object by hand or by a future
+    // refactor accidentally pushing the wrong shape.
+    const path = manifestPath("null-entries");
+    writeFileSync(path, JSON.stringify({
+      created_at: "x",
+      entries: [
+        null,
+        "not an object",
+        {
+          skill_name: "good",
+          canonical_path: "/x/SKILL.md",
+          symlinks: [],
+          source_session_ids: [],
+          source_session_paths: [],
+          source_agent: "claude_code",
+          gate_agent: "claude_code",
+          created_at: "2026-05-22T00:00:00.000Z",
+          uploaded: false,
+          insight: "Real insight.",
+        },
+      ],
+    }));
+    const latest = getLatestInsightEntry(path);
+    expect(latest).not.toBeNull();
+    expect(latest!.skill_name).toBe("good");
+  });
+
+  it("skips entries with non-string insight values", () => {
+    // Belt-and-suspenders against a future schema where insight is
+    // accidentally serialized as a number, array, or object.
+    const path = manifestPath("non-string-insights");
+    const m = makeManifest(0);
+    m.entries.push({
+      skill_name: "bad-insight-type",
+      canonical_path: "/x/SKILL.md",
+      symlinks: [],
+      source_session_ids: [],
+      source_session_paths: [],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-22T00:00:00.000Z",
+      uploaded: false,
+      insight: 42 as unknown as string,
+    });
+    writeLocalManifest(m, path);
+    expect(getLatestInsightEntry(path)).toBeNull();
+  });
+
+  it("handles entries with missing `created_at` via the empty-string fallback", () => {
+    // Branch coverage for the `(e.created_at ?? "")` fallback chain —
+    // tie-breaks across entries that legitimately lack the field
+    // without throwing on undefined comparison.
+    const path = manifestPath("missing-created-at");
+    writeFileSync(path, JSON.stringify({
+      created_at: "x",
+      entries: [
+        {
+          skill_name: "no-date",
+          canonical_path: "/x/A/SKILL.md",
+          symlinks: [],
+          source_session_ids: [],
+          source_session_paths: [],
+          source_agent: "claude_code",
+          gate_agent: "claude_code",
+          uploaded: false,
+          insight: "First found.",
+        },
+        {
+          skill_name: "with-date",
+          canonical_path: "/x/B/SKILL.md",
+          symlinks: [],
+          source_session_ids: [],
+          source_session_paths: [],
+          source_agent: "claude_code",
+          gate_agent: "claude_code",
+          created_at: "2026-05-22T00:00:00.000Z",
+          uploaded: false,
+          insight: "Newer.",
+        },
+      ],
+    }));
+    const latest = getLatestInsightEntry(path);
+    // Entry with a real created_at wins the > comparison against "".
+    expect(latest!.skill_name).toBe("with-date");
+  });
+
   it("picks the most recent insight-bearing entry across mixed entries", () => {
     // Mixed manifest: some entries have insight, some don't. We must
     // return the one with the highest created_at AMONG insight-bearing

@@ -63,9 +63,20 @@ vi.mock("../../src/utils/version-check.js", async (importOriginal) => {
 // N>1 → "N local skills") without depending on the developer's real
 // ~/.claude/hivemind/local-mined.json.
 const countLocalManifestEntriesMock = vi.fn();
+const getLatestInsightEntryMock = vi.fn();
 vi.mock("../../src/skillify/local-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/skillify/local-manifest.js")>();
-  return { ...actual, countLocalManifestEntries: (...a: unknown[]) => countLocalManifestEntriesMock(...a) };
+  return {
+    ...actual,
+    countLocalManifestEntries: (...a: unknown[]) => countLocalManifestEntriesMock(...a),
+    // Mock the insight accessor too: without this the session-start hook
+    // reads the developer's real ~/.claude/hivemind/local-mined.json at
+    // test time, leaking real-disk insight strings into a test that only
+    // mocked the count. CI runners with a pre-populated manifest would
+    // see the insight branch fire when the test expected the count
+    // fallback, producing a misleading red.
+    getLatestInsightEntry: (...a: unknown[]) => getLatestInsightEntryMock(...a),
+  };
 });
 
 let stdoutLines: string[] = [];
@@ -117,8 +128,12 @@ beforeEach(() => {
   queryMock.mockReset().mockResolvedValue([]); // "no existing summary"
   autoUpdateMock.mockReset().mockResolvedValue(undefined);
   getInstalledVersionMock.mockReset().mockReturnValue("9.9.9");
-  // Default: no manifest → 0 mined skills. Individual tests override.
+  // Default: no manifest → 0 mined skills, no insight entry. Individual
+  // tests override either or both. The insight mock MUST default to null
+  // so existing "legacy count branch" assertions don't accidentally trip
+  // the new concrete-insight rendering.
   countLocalManifestEntriesMock.mockReset().mockReturnValue(0);
+  getLatestInsightEntryMock.mockReset().mockReturnValue(null);
   // Disable auto-pull during this test: autoPullSkills would otherwise issue
   // an extra SQL query (against `skills`) through the same DeeplakeApi mock,
   // breaking the placeholder-branching call-count assertions. The auto-pull
@@ -370,6 +385,38 @@ describe("session-start hook — context shape edge cases", () => {
     const ctx = parsed.hookSpecificOutput.additionalContext;
     expect(ctx).toContain("5 local skills from past");
     expect(ctx).toContain("hivemind login");
+  });
+
+  it("renders the CONCRETE INSIGHT branch when getLatestInsightEntry returns a populated entry", async () => {
+    // Conversion-surface guard for the model-visible additionalContext.
+    // The user-visible side is covered by the notifications-rule tests;
+    // this one ensures the hook itself swaps in the insight rendering
+    // when an entry carries a non-empty `insight` field.
+    loadCredsMock.mockReturnValue(null);
+    countLocalManifestEntriesMock.mockReturnValue(7);
+    getLatestInsightEntryMock.mockReturnValue({
+      skill_name: "verify-before-done",
+      canonical_path: "/x/SKILL.md",
+      symlinks: [],
+      source_session_ids: ["sid"],
+      source_session_paths: ["/x/sid.jsonl"],
+      source_agent: "claude_code",
+      gate_agent: "claude_code",
+      created_at: "2026-05-22T08:58:07.613Z",
+      uploaded: false,
+      insight: "You revisited 4 merged PRs in the last month because tests weren't run before merge.",
+    });
+    const out = await runHook();
+    const parsed = JSON.parse(out!);
+    const ctx = parsed.hookSpecificOutput.additionalContext;
+    // Insight branch took over → user sees the concrete pattern, not a
+    // bare count. Negative pattern: the legacy "N local skills" phrasing
+    // MUST NOT appear when insight branch fires (mutually exclusive).
+    expect(ctx).toContain("Hivemind found a pattern in your past sessions");
+    expect(ctx).toContain("You revisited 4 merged PRs");
+    expect(ctx).toContain("`verify-before-done`");
+    expect(ctx).toContain("hivemind login");
+    expect(ctx).not.toContain("7 local skills from past");
   });
 
   it("does NOT append the mined-skills note when user is logged in (even with manifest present)", async () => {
