@@ -18,6 +18,7 @@ import { confirm, detectPlatforms, allPlatformIds, log, promptLine, warn, type P
 import { getVersion } from "./version.js";
 import { runUpdate } from "./update.js";
 import { renderCliHelpBlock } from "./skillify-spec.js";
+import { canOfferInstallScan, runInstallScan, formatScanResult } from "./install-scan.js";
 
 const AUTH_SUBCOMMANDS = new Set([
   "whoami",
@@ -178,14 +179,59 @@ async function runAuthGate(args: string[]): Promise<void> {
     return;
   }
 
+  // Install-time value-show: when the guards pass (claude CLI present,
+  // prior sessions on disk, no manifest yet, TTY attached), offer to
+  // scan the user's recent sessions for repeatable mistakes BEFORE
+  // showing the abstract sign-in pitch. A real insight from their own
+  // work converts on "keep this skill across machines" better than the
+  // generic "shared memory" copy.
+  //
+  // Every failure path (declined, timed out, no insight emitted)
+  // returns null and we fall through to the existing unlock copy — the
+  // install never dead-ends on a scan failure.
+  let foundInsight: { skill_name: string } | null = null;
+  if (canOfferInstallScan()) {
+    log("");
+    log("🐝 Hivemind installed.");
+    log("");
+    log("Want me to scan your recent Claude Code sessions for repeatable mistakes?");
+    log("Takes ~30s. The scan uses your Claude Code subscription.");
+    log("");
+    const scanOk = await confirm("Scan now?", true);
+    if (scanOk) {
+      log("");
+      log("Scanning your last 3 sessions (up to 90s)…");
+      const entry = await runInstallScan();
+      if (entry && entry.insight && entry.insight.trim().length > 0) {
+        log("");
+        log(formatScanResult(entry));
+        foundInsight = { skill_name: entry.skill_name };
+      } else {
+        log("");
+        log("No repeatable patterns found in this scan. (That's OK — the gate is conservative.)");
+      }
+    }
+  }
+
   log("");
-  log("🐝 One more step to unlock Hivemind");
-  log("");
-  log("To enable shared memory and auto-learning across your agents,");
-  log("we need to sign you in. Your traces will be securely stored in");
-  log("your private Hivemind, so all your agents can recall them.");
-  log("");
-  log("You can later connect your own cloud storage like S3/GCS/Azure Blob.");
+  if (foundInsight) {
+    // Insight-aware sign-in pitch: lead with the concrete value the
+    // user just saw rather than the generic "shared memory" framing.
+    // Skill name is kebab-case-validated upstream by mine-local's
+    // assertValidSkillName, so it's safe to interpolate inline.
+    log("🐝 Sign in to keep this skill across machines and share it with your team.");
+    log("");
+    log(`Without sign-in, \`${foundInsight.skill_name}\` lives only on this machine and`);
+    log("won't follow you to a new laptop or be shared with teammates who'd benefit.");
+  } else {
+    log("🐝 One more step to unlock Hivemind");
+    log("");
+    log("To enable shared memory and auto-learning across your agents,");
+    log("we need to sign you in. Your traces will be securely stored in");
+    log("your private Hivemind, so all your agents can recall them.");
+    log("");
+    log("You can later connect your own cloud storage like S3/GCS/Azure Blob.");
+  }
   log("");
   const yes = await confirm("Sign in now?", true);
 
