@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { chmodSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir, homedir, platform } from "node:os";
 import {
   compareSemverDesc,
   executeGc,
   isSemver,
+  isVersionInUse,
   planGc,
   readCurrentVersionFromManifest,
   resolveVersionedPluginDir,
@@ -267,6 +268,153 @@ describe("planGc", () => {
   it("handles missing versionsRoot gracefully", () => {
     const plan = planGc(join(root, "does-not-exist"), "0.6.39", 2, () => false);
     expect(plan).toEqual({ keep: [], deleteVersions: [], deleteSnapshots: [] });
+  });
+
+  // -- In-use refcounting (issue #188) -----------------------------------
+  // Without this, GC happily evicts an old version that a long-running
+  // session is still pinned to → every hook in that session ENOENTs on
+  // ${CLAUDE_PLUGIN_ROOT}/bundle/... afterwards.
+
+  it("keeps an old version when isInUse claims it's still in use", () => {
+    mk("0.6.37", "0.6.38", "0.6.39", "0.6.40");
+    // 0.6.37 is well below the keep-2 cutoff but a live session claims it.
+    const isInUse = (versionDir: string) => versionDir.endsWith("/0.6.37");
+    const plan = planGc(root, "0.6.40", 2, () => false, isInUse);
+    expect(plan.keep).toContain("0.6.37");
+    expect(plan.deleteVersions).not.toContain("0.6.37");
+    // 0.6.38 has no in-use claim, so it's still deleted.
+    expect(plan.deleteVersions).toContain("0.6.38");
+  });
+
+  it("still deletes old versions with no in-use claim", () => {
+    mk("0.6.37", "0.6.38", "0.6.39", "0.6.40");
+    const plan = planGc(root, "0.6.40", 2, () => false, () => false);
+    expect(new Set(plan.deleteVersions)).toEqual(new Set(["0.6.37", "0.6.38"]));
+  });
+
+  it("does NOT consult isInUse for versions already inside the keep window", () => {
+    // CLAUDE.md rule 6: assert count, not just presence. A correct impl
+    // short-circuits the refcount check for kept versions — calling
+    // isInUse on them would waste time and tempt buggy impls into
+    // double-keep paths.
+    mk("0.6.37", "0.6.38", "0.6.39", "0.6.40");
+    const calls: string[] = [];
+    const isInUse = (versionDir: string) => { calls.push(versionDir); return false; };
+    planGc(root, "0.6.40", 2, () => false, isInUse);
+    // Only 0.6.37 and 0.6.38 are deletion candidates; 0.6.39 and 0.6.40
+    // are auto-kept and must not be queried.
+    expect(calls.map(c => c.split("/").pop())).toEqual(["0.6.37", "0.6.38"]);
+  });
+
+  it("default isInUse (real disk) returns false when no .in_use dirs exist", () => {
+    // Old planGc tests don't pass an isInUse arg → they use the real one
+    // backed by readdirSync(.in_use). On these tmpdirs without .in_use/
+    // subdirs, the real impl must return false so behavior is unchanged.
+    mk("0.6.37", "0.6.39", "0.6.40");
+    const plan = planGc(root, "0.6.40", 2, () => false);
+    expect(plan.deleteVersions).toContain("0.6.37");
+  });
+});
+
+describe("isVersionInUse", () => {
+  let root: string;
+  beforeEach(() => { root = mkRoot(); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("returns false when the version dir has no .in_use subdirectory", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(v, { recursive: true });
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("returns false when .in_use is empty", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("returns true when .in_use holds a live process's claim with matching procStart", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    // Use *this* process as the live PID. On Linux we read its real
+    // procStart so the match succeeds. On macOS readProcStart returns
+    // null and the procStart check is skipped — also a match.
+    const pid = process.pid;
+    let procStart = "0";
+    if (platform() === "linux") {
+      const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const tail = raw.slice(raw.lastIndexOf(")") + 1).trim();
+      procStart = tail.split(/\s+/)[19] ?? "0";
+    }
+    writeFileSync(join(v, ".in_use", String(pid)), JSON.stringify({ pid, procStart }));
+    expect(isVersionInUse(v)).toBe(true);
+  });
+
+  it("returns false when the only claim's PID is dead", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    // 0x7FFFFFFF is above /proc/sys/kernel/pid_max on Linux and reserved
+    // on macOS → guaranteed not-alive.
+    writeFileSync(join(v, ".in_use", "2147483647"), JSON.stringify({ pid: 2147483647, procStart: "1" }));
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("returns false on Linux when procStart doesn't match the live PID (PID reuse case)", () => {
+    if (platform() !== "linux") return;
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    // Live PID (this test process), but with a procStart that can't
+    // match the kernel's actual start time. CLAUDE.md rule 1: cross-
+    // process state (PID-reuse) is one of the bugs that ship past
+    // single-instance tests; pin it explicitly.
+    writeFileSync(
+      join(v, ".in_use", String(process.pid)),
+      JSON.stringify({ pid: process.pid, procStart: "0" }),
+    );
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("ignores claim files with malformed JSON", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    writeFileSync(join(v, ".in_use", "garbage"), "not json {");
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("ignores claim files missing or with non-numeric pid", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    writeFileSync(join(v, ".in_use", "no-pid"), JSON.stringify({ procStart: "1" }));
+    writeFileSync(join(v, ".in_use", "bad-pid"), JSON.stringify({ pid: "not-a-number" }));
+    expect(isVersionInUse(v)).toBe(false);
+  });
+
+  it("returns true if ANY of multiple claim files is live (one alive among dead ones)", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    writeFileSync(join(v, ".in_use", "2147483647"), JSON.stringify({ pid: 2147483647, procStart: "1" }));
+    writeFileSync(join(v, ".in_use", "garbage"), "definitely not json");
+    // Our own PID — guaranteed live. Same Linux/macOS handling as the
+    // matching-procStart test above.
+    const pid = process.pid;
+    let procStart = "0";
+    if (platform() === "linux") {
+      const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const tail = raw.slice(raw.lastIndexOf(")") + 1).trim();
+      procStart = tail.split(/\s+/)[19] ?? "0";
+    }
+    writeFileSync(join(v, ".in_use", String(pid)), JSON.stringify({ pid, procStart }));
+    expect(isVersionInUse(v)).toBe(true);
+  });
+
+  it("treats a claim without procStart as live when the PID is alive (legacy claim format)", () => {
+    const v = join(root, "0.6.39");
+    mkdirSync(join(v, ".in_use"), { recursive: true });
+    // Forwards-compat: older Claude Code versions may have written
+    // claim files with just {pid}. Without procStart, we trust kill(pid, 0)
+    // alone — preferable to false-deleting a still-live session's bundle.
+    writeFileSync(join(v, ".in_use", String(process.pid)), JSON.stringify({ pid: process.pid }));
+    expect(isVersionInUse(v)).toBe(true);
   });
 });
 

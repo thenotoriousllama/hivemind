@@ -5,6 +5,7 @@
 
 import { execSync } from "node:child_process";
 import { deeplakeClientHeader } from "../utils/client-header.js";
+import { hivemindInstallIDHeader } from "./install-id.js";
 import {
   type Credentials,
   loadCredentials,
@@ -93,7 +94,11 @@ async function apiDelete(path: string, token: string, apiUrl: string, orgId?: st
 export async function requestDeviceCode(apiUrl = DEFAULT_API_URL): Promise<DeviceCodeResponse> {
   const resp = await fetch(`${apiUrl}/auth/device/code`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...deeplakeClientHeader() },
+    headers: {
+      "Content-Type": "application/json",
+      ...deeplakeClientHeader(),
+      ...hivemindInstallIDHeader(),
+    },
   });
   if (!resp.ok) throw new Error(`Device flow unavailable: HTTP ${resp.status}`);
   return resp.json() as Promise<DeviceCodeResponse>;
@@ -102,7 +107,11 @@ export async function requestDeviceCode(apiUrl = DEFAULT_API_URL): Promise<Devic
 export async function pollForToken(deviceCode: string, apiUrl = DEFAULT_API_URL): Promise<DeviceTokenResponse | null> {
   const resp = await fetch(`${apiUrl}/auth/device/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...deeplakeClientHeader() },
+    headers: {
+      "Content-Type": "application/json",
+      ...deeplakeClientHeader(),
+      ...hivemindInstallIDHeader(),
+    },
     body: JSON.stringify({ device_code: deviceCode }),
   });
   if (resp.ok) return resp.json() as Promise<DeviceTokenResponse>;

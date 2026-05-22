@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const fetchMock = vi.fn();
 const saveCredentialsMock = vi.fn();
 const loadCredentialsMock = vi.fn();
+const installIDHeaderMock = vi.fn();
 
 vi.stubGlobal("fetch", fetchMock);
 vi.mock("../../src/commands/auth-creds.js", () => ({
@@ -23,6 +24,13 @@ vi.mock("../../src/commands/auth-creds.js", () => ({
 }));
 vi.mock("../../src/utils/client-header.js", () => ({
   deeplakeClientHeader: () => ({ "X-Deeplake-Client": "hivemind/test" }),
+}));
+// Mock install-id so device-flow tests neither touch the test runner's
+// real $HOME (which would create ~/.deeplake/install-id) nor depend on
+// the actual UUID generation. installIDHeaderMock controls what
+// hivemindInstallIDHeader() returns per test case.
+vi.mock("../../src/commands/install-id.js", () => ({
+  hivemindInstallIDHeader: () => installIDHeaderMock(),
 }));
 
 async function importAuth() {
@@ -38,6 +46,11 @@ beforeEach(() => {
   fetchMock.mockReset();
   saveCredentialsMock.mockReset();
   loadCredentialsMock.mockReset();
+  installIDHeaderMock.mockReset();
+  // Default: install-id helper returns the empty object, so the header
+  // is omitted (matches the graceful-degradation path). Individual tests
+  // override this to assert the happy path.
+  installIDHeaderMock.mockReturnValue({});
 });
 
 afterEach(() => {
@@ -85,6 +98,33 @@ describe("requestDeviceCode", () => {
     expect(init.headers["X-Deeplake-Client"]).toBe("hivemind/test");
   });
 
+  it("includes X-Hivemind-Install-Id header when install-id helper returns one", async () => {
+    installIDHeaderMock.mockReturnValueOnce({ "X-Hivemind-Install-Id": "uuid-from-helper" });
+    fetchMock.mockResolvedValueOnce(ok({
+      device_code: "dc1", user_code: "ABCD", verification_uri: "u", verification_uri_complete: "uc",
+      expires_in: 600, interval: 5,
+    }));
+    const { requestDeviceCode } = await importAuth();
+    await requestDeviceCode("https://api.example");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["X-Hivemind-Install-Id"]).toBe("uuid-from-helper");
+  });
+
+  it("omits X-Hivemind-Install-Id header when install-id helper returns empty (graceful-degrade path)", async () => {
+    // beforeEach default already sets installIDHeaderMock to return {} — make it explicit here for clarity.
+    installIDHeaderMock.mockReturnValueOnce({});
+    fetchMock.mockResolvedValueOnce(ok({
+      device_code: "dc1", user_code: "ABCD", verification_uri: "u", verification_uri_complete: "uc",
+      expires_in: 600, interval: 5,
+    }));
+    const { requestDeviceCode } = await importAuth();
+    await requestDeviceCode("https://api.example");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["X-Hivemind-Install-Id"]).toBeUndefined();
+    // Other headers must still be present — the missing install-id must not nuke them.
+    expect(init.headers["X-Deeplake-Client"]).toBe("hivemind/test");
+  });
+
   it("throws on non-200 response", async () => {
     fetchMock.mockResolvedValueOnce(new Response("nope", { status: 503 }));
     const { requestDeviceCode } = await importAuth();
@@ -98,6 +138,32 @@ describe("pollForToken", () => {
     const { pollForToken } = await importAuth();
     const r = await pollForToken("dc1", "https://api.example");
     expect(r?.access_token).toBe("tok");
+  });
+
+  it("includes X-Hivemind-Install-Id header when install-id helper returns one", async () => {
+    installIDHeaderMock.mockReturnValueOnce({ "X-Hivemind-Install-Id": "uuid-poll" });
+    fetchMock.mockResolvedValueOnce(ok({ access_token: "tok", token_type: "Bearer", expires_in: 3600 }));
+    const { pollForToken } = await importAuth();
+    await pollForToken("dc1", "https://api.example");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.example/auth/device/token");
+    expect(init.method).toBe("POST");
+    expect(init.headers["X-Hivemind-Install-Id"]).toBe("uuid-poll");
+    expect(init.headers["X-Deeplake-Client"]).toBe("hivemind/test");
+    // device_code must be in the body, not the headers — sanity that we
+    // didn't break the request shape while adding the header.
+    expect(JSON.parse(init.body)).toEqual({ device_code: "dc1" });
+  });
+
+  it("omits X-Hivemind-Install-Id header when install-id helper returns empty", async () => {
+    installIDHeaderMock.mockReturnValueOnce({});
+    fetchMock.mockResolvedValueOnce(ok({ access_token: "tok", token_type: "Bearer", expires_in: 3600 }));
+    const { pollForToken } = await importAuth();
+    await pollForToken("dc1", "https://api.example");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["X-Hivemind-Install-Id"]).toBeUndefined();
+    expect(init.headers["X-Deeplake-Client"]).toBe("hivemind/test");
   });
 
   it("returns null on authorization_pending (still waiting)", async () => {

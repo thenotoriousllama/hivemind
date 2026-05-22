@@ -21,10 +21,10 @@ jobs:
     name: Duplication check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
 
@@ -40,7 +40,7 @@ jobs:
 
       - name: Upload jscpd report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: jscpd-report
           path: jscpd-report/
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
         with:
           # Full history so the "Build PR coverage comment" step can do
           # `git diff origin/<base>...HEAD` to detect touched src/ files.
@@ -59,7 +59,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
 
@@ -220,7 +220,7 @@ jobs:
 
       - name: Post coverage comment on PR
         if: github.event_name == 'pull_request' && always() && steps.pr-coverage.outputs.body-file != ''
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: pr-coverage-report
           path: /tmp/pr-coverage.md

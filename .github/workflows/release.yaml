@@ -30,12 +30,12 @@ jobs:
       sha: ${{ steps.set_outputs.outputs.sha }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: "24.12"
 
@@ -175,7 +175,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.0
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: "${{ steps.version.outputs.version }} — ${{ steps.pr.outputs.title }}"
@@ -215,7 +215,7 @@ jobs:
       group: hivemind-publish
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
         with:
           # Pin to the bump commit captured by the release job. Pinning
           # to a SHA (not `main`) is required: the `production`
@@ -226,7 +226,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: "24.12"
           registry-url: "https://registry.npmjs.org"

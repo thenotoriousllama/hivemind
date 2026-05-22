@@ -20,8 +20,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, sep } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getVersion } from "./version.js";
 import { log, warn } from "./util.js";
@@ -29,6 +30,16 @@ import { isNewer } from "../utils/version-check.js";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org/@deeplake/hivemind/latest";
 const PKG_NAME = "@deeplake/hivemind";
+
+/**
+ * Default lock path: `~/.deeplake/hivemind-update.lock`. Matches the
+ * existing convention (`src/notifications/queue.ts`,
+ * `src/embeddings/protocol.ts`) of keeping per-user state under
+ * `~/.deeplake/`.
+ */
+export function defaultLockPath(): string {
+  return join(homedir(), ".deeplake", "hivemind-update.lock");
+}
 
 export type InstallKind =
   | "npm-global"   // npm install -g @deeplake/hivemind — owns its own prefix dir
@@ -147,11 +158,95 @@ export interface UpdateOptions {
   currentVersionOverride?: string;
   /** Inject the spawn impl (tests). Default: execSync with stdio inherit. */
   spawn?: (cmd: string, args: string[]) => void;
+  /** Override the lockfile path (tests). Default: `~/.deeplake/hivemind-update.lock`. */
+  lockPathOverride?: string;
 }
 
 const defaultSpawn = (cmd: string, args: string[]): void => {
   execFileSync(cmd, args, { stdio: "inherit" });
 };
+
+/**
+ * Non-blocking O_EXCL pidfile lock around `npm install -g @deeplake/hivemind`.
+ *
+ * Why this exists: `SessionStart` hooks dispatch `hivemind update` detached
+ * on every Claude Code session start (twice per session — from both
+ * `session-start.ts` and `session-start-setup.ts`, by design). Multiple
+ * sessions starting within the same second produced 2–N concurrent
+ * `npm install -g @deeplake/hivemind@latest` invocations, which race in
+ * npm's reify step: each one renames the existing install to the SAME
+ * deterministic backup path (`.hivemind-<hash>`), all but one fail with
+ * `ENOTEMPTY`, and the winner can still be SIGKILLed mid-extract — leaving
+ * a partially-populated install on disk (node_modules/ present but
+ * package.json / bundle/ missing → dangling bin symlink → `hivemind:
+ * command not found`). Observed in production on 2026-05-19 with three
+ * concurrent installs at 17:39:21 from cwd `~/al-projects/tests`.
+ *
+ * Semantics on contention: non-blocking. The autoupdate path is
+ * fire-and-forget — late arrivals must exit 0 silently, not queue up and
+ * eventually run a redundant install. The next session start will dispatch
+ * again anyway (the cache was intentionally removed; see
+ * src/hooks/shared/autoupdate.ts:37-54).
+ *
+ * Stale-lock reclaim: if the lockfile holds a PID that `process.kill(pid, 0)`
+ * reports gone (ESRCH / not-a-process), the previous holder crashed and we
+ * reclaim the lock atomically.
+ *
+ * Returns the open fd on success (caller must `releaseLock(fd, path)` on
+ * every exit path), or `null` if a live holder owns it.
+ */
+function tryAcquireLock(path: string): number | null {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+
+  const claim = (): number => {
+    const fd = openSync(path, "wx", 0o600);
+    writeSync(fd, String(process.pid));
+    return fd;
+  };
+
+  try {
+    return claim();
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
+
+  // EEXIST: check if the holder is alive.
+  let holderPid = 0;
+  try {
+    holderPid = Number(readFileSync(path, "utf-8").trim()) || 0;
+  } catch {
+    // Lockfile vanished between EEXIST and read — another caller is mid-
+    // cleanup. Try once more to acquire; if that also fails, treat the
+    // current state as "someone else owns it" and bail.
+    try { return claim(); } catch { return null; }
+  }
+
+  if (holderPid > 0) {
+    try {
+      process.kill(holderPid, 0);
+      // Holder is alive — refuse to proceed.
+      log(`another hivemind update is already running (pid=${holderPid}); skipping.`);
+      return null;
+    } catch {
+      // Holder is gone — fall through to stale-reclaim.
+    }
+  }
+
+  // Stale lock: unlink + retry once. If retry races against another
+  // reclaim, give up — they own it now.
+  try { unlinkSync(path); } catch { /* best-effort */ }
+  try {
+    return claim();
+  } catch {
+    log(`another hivemind update is already running; skipping.`);
+    return null;
+  }
+}
+
+function releaseLock(fd: number, path: string): void {
+  try { closeSync(fd); } catch { /* best-effort */ }
+  try { unlinkSync(path); } catch { /* best-effort */ }
+}
 
 /**
  * Run the update flow. Returns the exit code the CLI should use.
@@ -189,30 +284,44 @@ export async function runUpdate(opts: UpdateOptions = {}): Promise<number> {
         log(`(dry-run) Would re-run: hivemind install --skip-auth`);
         return 0;
       }
-      log(`Upgrading via npm…`);
+
+      // Serialize concurrent updaters. The autoupdate path can dispatch
+      // 2–N `hivemind update` processes within the same second (per-session
+      // double-fire × N concurrent sessions); without this lock they race
+      // on npm's reify step and corrupt the install. See `tryAcquireLock`
+      // for the full incident context.
+      const lockPath = opts.lockPathOverride ?? defaultLockPath();
+      const lockFd = tryAcquireLock(lockPath);
+      if (lockFd === null) return 0;
+
       try {
-        spawn("npm", ["install", "-g", `${PKG_NAME}@latest`]);
-      } catch (e: any) {
-        warn(`npm install failed: ${e.message}`);
-        warn(`Try running it manually: npm install -g ${PKG_NAME}@latest`);
-        return 1;
+        log(`Upgrading via npm…`);
+        try {
+          spawn("npm", ["install", "-g", `${PKG_NAME}@latest`]);
+        } catch (e: any) {
+          warn(`npm install failed: ${e.message}`);
+          warn(`Try running it manually: npm install -g ${PKG_NAME}@latest`);
+          return 1;
+        }
+        log(``);
+        log(`Refreshing agent bundles…`);
+        try {
+          // Re-exec the NEW binary to use new pkgRoot()/bundle paths. The
+          // user's $PATH is preserved through stdio: "inherit", so this
+          // resolves to the freshly-installed `hivemind` regardless of how
+          // npm laid it out.
+          spawn("hivemind", ["install", "--skip-auth"]);
+        } catch (e: any) {
+          warn(`Agent refresh failed: ${e.message}`);
+          warn(`Run manually: hivemind install`);
+          return 1;
+        }
+        log(``);
+        log(`Updated to ${latest}.`);
+        return 0;
+      } finally {
+        releaseLock(lockFd, lockPath);
       }
-      log(``);
-      log(`Refreshing agent bundles…`);
-      try {
-        // Re-exec the NEW binary to use new pkgRoot()/bundle paths. The
-        // user's $PATH is preserved through stdio: "inherit", so this
-        // resolves to the freshly-installed `hivemind` regardless of how
-        // npm laid it out.
-        spawn("hivemind", ["install", "--skip-auth"]);
-      } catch (e: any) {
-        warn(`Agent refresh failed: ${e.message}`);
-        warn(`Run manually: hivemind install`);
-        return 1;
-      }
-      log(``);
-      log(`Updated to ${latest}.`);
-      return 0;
     }
 
     case "npx": {
