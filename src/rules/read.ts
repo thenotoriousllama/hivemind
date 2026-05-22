@@ -57,8 +57,12 @@ export async function listRules(
   const safe = sqlIdent(tableName);
   // ORDER BY version DESC primes the JS dedup: the first row seen per
   // rule_id is automatically the winning latest-version row.
+  // Tertiary tie-breaker on `id` so two rows with identical (version,
+  // created_at) — possible under a v=N+1 race or same-millisecond
+  // edits — pick the same winner across `listRules` and
+  // `getRuleLatest`. Without it those two callers can disagree.
   const rows = await query(
-    `SELECT ${SELECT_COLS} FROM "${safe}" ORDER BY version DESC, created_at DESC`,
+    `SELECT ${SELECT_COLS} FROM "${safe}" ORDER BY version DESC, created_at DESC, id DESC`,
   );
 
   const latest = new Map<string, RuleRow>();
@@ -73,7 +77,9 @@ export async function listRules(
     statusFilter === "all" ? true : r.status === statusFilter,
   );
 
-  filtered.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  filtered.sort(
+    (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id),
+  );
   return filtered.slice(0, opts.limit ?? 10);
 }
 
@@ -89,17 +95,17 @@ export async function getRuleLatest(
   ruleId: string,
 ): Promise<RuleRow | null> {
   const safe = sqlIdent(tableName);
-  // Two-key ORDER BY: version DESC picks the highest-numbered version,
-  // created_at DESC breaks ties deterministically when a race between
-  // two concurrent edits produced duplicate v=N+1 rows for the same
-  // rule_id. listRules() uses the same compound key (see SELECT below),
-  // so single-rule and list reads agree on which row is "latest"
-  // regardless of which one a query happens to scan first. Codex review
-  // on S2 surfaced this.
+  // Three-key ORDER BY: version DESC picks the highest-numbered
+  // version, created_at DESC breaks ties deterministically when a race
+  // between two concurrent edits produced duplicate v=N+1 rows for the
+  // same rule_id. The tertiary `id DESC` covers the residual case where
+  // (version, created_at) also tie — same-millisecond edits from two
+  // agents — so this and listRules() agree on the winner row-for-row.
+  // CodeRabbit on PR #193 surfaced the missing tertiary.
   const rows = await query(
     `SELECT ${SELECT_COLS} FROM "${safe}" ` +
       `WHERE rule_id = '${sqlStr(ruleId)}' ` +
-      `ORDER BY version DESC, created_at DESC LIMIT 1`,
+      `ORDER BY version DESC, created_at DESC, id DESC LIMIT 1`,
   );
   if (rows.length === 0) return null;
   return normalize(rows[0]);

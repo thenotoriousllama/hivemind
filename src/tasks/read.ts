@@ -74,9 +74,11 @@ export async function listTasks(
   opts: ListTasksOpts = {},
 ): Promise<TaskRow[]> {
   const safe = sqlIdent(tableName);
+  // Tertiary `id DESC` covers same-millisecond v=N+1 races so this and
+  // getTaskLatest() pick the same winner. CodeRabbit on PR #193.
   const rows = await query(
     `SELECT ${SELECT_COLS} FROM "${safe}" ` +
-      `ORDER BY version DESC, created_at DESC`,
+      `ORDER BY version DESC, created_at DESC, id DESC`,
   );
 
   const latest = new Map<string, TaskRow>();
@@ -112,7 +114,9 @@ export async function listTasks(
     return true;
   });
 
-  filtered.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  filtered.sort(
+    (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id),
+  );
   return filtered.slice(0, opts.limit ?? 10);
 }
 
@@ -124,11 +128,12 @@ export async function getTaskLatest(
 ): Promise<TaskRow | null> {
   const safe = sqlIdent(tableName);
   // Compound ORDER BY: deterministic tie-break under the concurrent
-  // v=N+1 race documented in src/rules/read.ts.
+  // v=N+1 race documented in src/rules/read.ts. Tertiary `id DESC`
+  // covers the same-millisecond residual case.
   const rows = await query(
     `SELECT ${SELECT_COLS} FROM "${safe}" ` +
       `WHERE task_id = '${sqlStr(taskId)}' ` +
-      `ORDER BY version DESC, created_at DESC LIMIT 1`,
+      `ORDER BY version DESC, created_at DESC, id DESC LIMIT 1`,
   );
   if (rows.length === 0) return null;
   return normalize(rows[0]);

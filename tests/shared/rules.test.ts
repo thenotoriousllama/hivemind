@@ -173,8 +173,10 @@ describe("editRule", () => {
     });
     expect(result).toEqual({ rule_id: "rule-uuid", version: 2 });
     expect(calls).toHaveLength(2);
-    // ORDER BY carries the tie-break compound key (see getRuleLatest test below).
-    expect(calls[0]).toMatch(/^SELECT .* FROM "hivemind_rules" WHERE rule_id = 'rule-uuid' ORDER BY version DESC, created_at DESC LIMIT 1$/);
+    // ORDER BY carries the tie-break compound key (see getRuleLatest test
+    // below). Tertiary `id DESC` was added in PR #193 (CodeRabbit) to
+    // resolve same-millisecond v=N+1 races deterministically.
+    expect(calls[0]).toMatch(/^SELECT .* FROM "hivemind_rules" WHERE rule_id = 'rule-uuid' ORDER BY version DESC, created_at DESC, id DESC LIMIT 1$/);
     expect(calls[1]).toMatch(/^INSERT INTO "hivemind_rules"/);
     expect(calls[1]).toContain(`E'new text'`);
     expect(calls[1]).toContain(", 2, ");
@@ -281,7 +283,7 @@ describe("listRules", () => {
     expect(rows[0].text).toBe("A v2");
     expect(rows[0].version).toBe(2);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatch(/^SELECT .* FROM "hivemind_rules" ORDER BY version DESC, created_at DESC$/);
+    expect(calls[0]).toMatch(/^SELECT .* FROM "hivemind_rules" ORDER BY version DESC, created_at DESC, id DESC$/);
   });
 
   it("honors the status='all' filter (no status filter applied)", async () => {
@@ -358,7 +360,7 @@ describe("getRuleLatest", () => {
     // match so single-rule and list reads agree.
     const { calls, query } = mockQuery([() => []]);
     await getRuleLatest(query, TBL, "X");
-    expect(calls[0]).toContain("ORDER BY version DESC, created_at DESC");
+    expect(calls[0]).toContain("ORDER BY version DESC, created_at DESC, id DESC");
     expect(calls[0]).not.toMatch(/ORDER BY version DESC LIMIT 1/);
   });
 

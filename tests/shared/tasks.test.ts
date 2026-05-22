@@ -293,8 +293,10 @@ describe("editTask", () => {
     });
     expect(result).toEqual({ task_id: "task-uuid", version: 2 });
     expect(calls).toHaveLength(2);
-    // SELECT carries the compound tie-break ORDER BY (race-safety regression guard).
-    expect(calls[0]).toMatch(/ORDER BY version DESC, created_at DESC LIMIT 1$/);
+    // SELECT carries the compound tie-break ORDER BY (race-safety regression
+    // guard). Tertiary `id DESC` added in PR #193 (CodeRabbit) — see
+    // src/tasks/read.ts:getTaskLatest comment.
+    expect(calls[0]).toMatch(/ORDER BY version DESC, created_at DESC, id DESC LIMIT 1$/);
     expect(calls[1]).toMatch(/^INSERT INTO "hivemind_tasks"/);
     expect(calls[1]).toContain(`E'tightened'`);
     expect(calls[1]).toContain(", 2, ");
@@ -547,7 +549,7 @@ describe("getTaskLatest", () => {
     const row = await getTaskLatest(query, TBL, "X");
     expect(row?.version).toBe(7);
     expect(calls[0]).toContain(`task_id = 'X'`);
-    expect(calls[0]).toContain("ORDER BY version DESC, created_at DESC");
+    expect(calls[0]).toContain("ORDER BY version DESC, created_at DESC, id DESC");
     expect(calls[0]).toMatch(/LIMIT 1$/);
   });
 
