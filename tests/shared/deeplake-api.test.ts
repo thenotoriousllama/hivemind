@@ -398,6 +398,7 @@ import {
   TASK_EVENTS_COLUMNS,
   GOALS_COLUMNS,
   KPIS_COLUMNS,
+  CODEBASE_COLUMNS,
 } from "../../src/deeplake-schema.js";
 
 /** Render an info_schema response shape: `[{ column_name: "<name>" }, ...]`. */
@@ -997,9 +998,71 @@ describe("ensureRulesTable / ensureTasksTable / ensureTaskEventsTable: identifie
     await expect(api.ensureTaskEventsTable(evil)).rejects.toThrow();
     await expect(api.ensureGoalsTable(evil)).rejects.toThrow();
     await expect(api.ensureKpisTable(evil)).rejects.toThrow();
+    await expect(api.ensureCodebaseTable(evil)).rejects.toThrow();
     // None of the rejected calls should have hit the network — sqlIdent
     // throws before listTables() runs.
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+// ── ensureCodebaseTable ─────────────────────────────────────────────────────
+
+describe("DeeplakeApi.ensureCodebaseTable", () => {
+  it("creates codebase table when missing; heals after CREATE; emits the identity-key index", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [] }),
+    });
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));                              // CREATE TABLE
+    mockFetch.mockResolvedValueOnce(infoSchemaResponse(allOf(CODEBASE_COLUMNS)));   // post-CREATE heal SELECT
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));                              // CREATE INDEX
+    const api = makeApi();
+    await api.ensureCodebaseTable("codebase");
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+
+    const createSql = JSON.parse(mockFetch.mock.calls[1][1].body).query;
+    expect(createSql).toContain(`CREATE TABLE IF NOT EXISTS "codebase"`);
+    expect(createSql).toContain("USING deeplake");
+
+    const indexSql = JSON.parse(mockFetch.mock.calls[3][1].body).query;
+    expect(indexSql).toContain(`"codebase"`);
+    // Composite identity index: (org_id, workspace_id, repo_slug, user_id, worktree_id, commit_sha)
+    expect(indexSql).toContain(`"org_id"`);
+    expect(indexSql).toContain(`"commit_sha"`);
+  });
+
+  it("heals after CREATE: missing required column gets ALTERed before returning", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [] }),
+    });
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));                              // CREATE (no-op vs legacy)
+    // Drop the first column from the heal response — any column works; we
+    // just need to force the ALTER branch. Use a column we know is in
+    // CODEBASE_COLUMNS by index.
+    const dropCol = CODEBASE_COLUMNS[1].name;
+    const legacy = allOf(CODEBASE_COLUMNS).filter(c => c !== dropCol);
+    mockFetch.mockResolvedValueOnce(infoSchemaResponse(legacy));                    // heal SELECT
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));                              // ALTER
+    mockFetch.mockResolvedValueOnce(jsonResponse({}));                              // CREATE INDEX
+    const api = makeApi();
+    await api.ensureCodebaseTable("codebase");
+    const alterSql = JSON.parse(mockFetch.mock.calls[3][1].body).query;
+    expect(alterSql).toMatch(new RegExp(`^ALTER TABLE "codebase" ADD COLUMN ${dropCol} `));
+  });
+
+  it("on existing codebase table fully up-to-date: no ALTER fires", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [{ table_name: "codebase" }] }),
+    });
+    mockFetch.mockResolvedValueOnce(infoSchemaResponse(allOf(CODEBASE_COLUMNS)));
+    mockFetch.mockResolvedValueOnce(jsonResponse({})); // CREATE INDEX
+    const api = makeApi();
+    await api.ensureCodebaseTable("codebase");
+    const allSql = mockFetch.mock.calls.filter(c => c[1]?.body).map(c => JSON.parse(c[1].body).query).join(" | ");
+    expect(allSql).not.toContain("ALTER TABLE");
+    expect(allSql).not.toContain("CREATE TABLE");
   });
 });
 
