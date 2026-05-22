@@ -191,7 +191,9 @@ async function main(): Promise<void> {
     : "";
   // Async auto-pull on SessionStart — detached, never blocks. Pulled
   // bytes land for the NEXT SessionStart. See src/graph/spawn-pull-worker.ts.
-  spawnGraphPullWorker(resolveCwd(input), __bundleDir);
+  // Gate on creds: avoid wasted process churn when unauthenticated
+  // (pullSnapshot would early-return skipped-no-auth anyway).
+  if (creds?.token) spawnGraphPullWorker(resolveCwd(input), __bundleDir);
 
   const additionalContext = creds?.token
     ? `${context}\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}`

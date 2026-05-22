@@ -115,7 +115,13 @@ async function main(): Promise<void> {
   // Async auto-pull of the latest cloud snapshot for HEAD. Detached and
   // truly fire-and-forget — see src/graph/spawn-pull-worker.ts and
   // src/hooks/graph-pull-worker.ts. Lands for the NEXT SessionStart.
-  spawnGraphPullWorker(input.cwd, __bundleDir);
+  //
+  // Gate on creds: pullSnapshot would early-return "skipped-no-auth"
+  // anyway when there's no token, but spawning a worker just to have it
+  // exit is wasted process churn. The check also keeps the codex
+  // session-start "spawn must not fire when unauthenticated" contract
+  // (tests/codex/codex-session-start-hook.test.ts).
+  if (creds?.token) spawnGraphPullWorker(input.cwd, __bundleDir);
 
   const additionalContext = creds?.token
     ? `Hivemind: logged in as org ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"}).${versionNotice}`

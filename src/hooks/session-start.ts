@@ -236,7 +236,9 @@ async function main(): Promise<void> {
   // pulled bytes land for the NEXT SessionStart to pick up). Putting the
   // spawn here is purely organizational — order doesn't matter because
   // the worker is fully detached.
-  spawnGraphPullWorker(input.cwd ?? process.cwd(), __bundleDir);
+  // Gate on creds: pullSnapshot would early-return "skipped-no-auth"
+  // anyway, so spawning a worker without auth is wasted process churn.
+  if (creds?.token) spawnGraphPullWorker(input.cwd ?? process.cwd(), __bundleDir);
   const graphLine = graphContextLine(input.cwd ?? process.cwd());
   const graphNote = graphLine ?? "";
 

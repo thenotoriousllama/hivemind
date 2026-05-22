@@ -14,7 +14,7 @@
 
 import { execSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 import { createHash } from "node:crypto";
 
@@ -416,11 +416,19 @@ function parseBuildArgs(args: string[]): BuildOptions {
 
 export async function runBuildCommand(args: string[]): Promise<void> {
   const opts = parseBuildArgs(args);
+  // Resolve cwd to absolute once so every downstream consumer (repoKey,
+  // worktreeId, worktree_path observation, the per-file `relative()` calls,
+  // pushSnapshot / pullSnapshot) sees the same stable input. Without this,
+  // invoking `--cwd ../repo` from two different directories produces two
+  // different repo keys / worktree IDs for the same checkout. CodeRabbit
+  // P1 fix; deriveProjectKey is also defensive at its boundary but normalizing
+  // here keeps logged paths absolute too (worktree_path, output messages).
+  const cwd = resolve(opts.cwd);
 
-  const { key: repoKey, project } = deriveProjectKey(opts.cwd);
+  const { key: repoKey, project } = deriveProjectKey(cwd);
   const baseDir = repoDir(repoKey);
-  const commitSha = readGitCommit(opts.cwd);
-  const branch = readGitBranch(opts.cwd);
+  const commitSha = readGitCommit(cwd);
+  const branch = readGitBranch(cwd);
   const version = getVersion();
 
   console.log(`Building codebase graph for ${project}`);
@@ -430,7 +438,7 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   console.log(`  output:     ${baseDir}`);
   console.log("");
 
-  const sourceFiles = discoverSourceFiles(opts.cwd);
+  const sourceFiles = discoverSourceFiles(cwd);
   console.log(`Discovered ${sourceFiles.length} TypeScript source files. Extracting...`);
 
   const extractions: FileExtraction[] = [];
@@ -438,7 +446,7 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   let totalParseErrors = 0;
   let cacheHits = 0;
   for (const abs of sourceFiles) {
-    const rel = toForwardSlash(relative(opts.cwd, abs));
+    const rel = toForwardSlash(relative(cwd, abs));
     try {
       const content = readFileSync(abs, "utf8");
       // Per-file content-hash cache: same file content (regardless of path)
@@ -475,7 +483,7 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   const observation: GraphObservation = {
     ts: new Date().toISOString(),
     branch,
-    worktree_path: opts.cwd,
+    worktree_path: cwd,
     repo_project: project,
     generator_version: version,
     source_files_extracted: extractions.length,
@@ -486,7 +494,7 @@ export async function runBuildCommand(args: string[]): Promise<void> {
   // Pass worktreeId so writeSnapshot routes latest-commit.txt + .last-build.json
   // under baseDir/worktrees/<id>/ instead of clobbering another worktree's
   // singletons. Snapshots/cache/history stay shared at the repo level.
-  const worktreeId = workTreeIdFor(opts.cwd);
+  const worktreeId = workTreeIdFor(cwd);
   const result = writeSnapshot(snapshot, baseDir, opts.trigger, worktreeId);
 
   console.log("");

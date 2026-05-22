@@ -11,7 +11,7 @@
  */
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 
 /**
  * Default port per scheme. If the URL carries `:<defaultPort>` explicitly,
@@ -70,13 +70,24 @@ export function normalizeGitRemoteUrl(url: string): string {
   return s.toLowerCase();
 }
 
-/** Stable project identifier — git remote URL hash, fallback to cwd basename hash. */
+/**
+ * Stable project identifier — git remote URL hash, fallback to absolute-cwd hash.
+ *
+ * cwd is resolved to absolute up-front so the fallback key (used when there's
+ * no git remote) is stable regardless of caller location. Without this, the
+ * same directory addressed as `.`, `./foo`, or its absolute path would hash
+ * to three different keys — and the `--cwd <relative>` CLI argument would
+ * become caller-position-dependent. The git-remote branch is unaffected
+ * (already location-independent: the remote URL is the same wherever you run
+ * `git config` from inside the repo). CodeRabbit P1 fix.
+ */
 export function deriveProjectKey(cwd: string): { key: string; project: string } {
-  const project = basename(cwd) || "unknown";
+  const absCwd = resolve(cwd);
+  const project = basename(absCwd) || "unknown";
   let signature: string | null = null;
   try {
     const raw = execSync("git config --get remote.origin.url", {
-      cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+      cwd: absCwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     signature = raw ? normalizeGitRemoteUrl(raw) : null;
   } catch {
@@ -84,7 +95,7 @@ export function deriveProjectKey(cwd: string): { key: string; project: string } 
   }
   // Hash whichever signature we have; falls back to absolute cwd so two
   // different checkouts with no remote still get distinct keys.
-  const input = signature ?? cwd;
+  const input = signature ?? absCwd;
   const key = createHash("sha1").update(input).digest("hex").slice(0, 16);
   return { key, project };
 }

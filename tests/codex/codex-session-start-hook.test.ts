@@ -149,8 +149,14 @@ describe("codex session-start hook — spawn async setup", () => {
     const fake = makeFakeChild();
     spawnMock.mockReturnValue(fake);
     await runHook();
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [cmd, args, opts] = spawnMock.mock.calls[0];
+    // Two spawns now: (a) session-start-setup.js, (b) graph-pull-worker
+    // (gated on creds — which the default fixture provides). Find the
+    // setup-spawn by argv pattern instead of asserting a strict count.
+    const setupCall = spawnMock.mock.calls.find(
+      ([_cmd, args]) => Array.isArray(args) && args[0]?.includes?.("session-start-setup.js"),
+    );
+    expect(setupCall).toBeDefined();
+    const [cmd, args, opts] = setupCall!;
     expect(cmd).toBe("node");
     expect(args[0]).toContain("session-start-setup.js");
     expect(opts.detached).toBe(true);

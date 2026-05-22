@@ -98,6 +98,40 @@ describe("deriveProjectKey", () => {
     const { project } = deriveProjectKey("/tmp/some-project-name");
     expect(project).toBe("some-project-name");
   });
+
+  it("CodeRabbit P1 regression: relative vs absolute cwd → same key (when no git remote)", () => {
+    // Before the fix, deriveProjectKey hashed the raw `cwd` argument. A
+    // caller passing `.` from inside a directory would hash to a different
+    // key than a caller passing the absolute path of the SAME directory.
+    // After the fix we `path.resolve(cwd)` first so both forms collapse.
+    const abs = mkdtempSync(join(tmpdir(), "deriveProjectKey-rel-abs-"));
+    trackedKeys.push(abs);
+    const prev = process.cwd();
+    try {
+      process.chdir(abs);
+      const fromDot = deriveProjectKey(".");
+      const fromAbs = deriveProjectKey(abs);
+      expect(fromDot.key).toBe(fromAbs.key);
+    } finally {
+      process.chdir(prev);
+    }
+  });
+
+  it("CodeRabbit P1 regression: project basename derived from RESOLVED cwd, not raw", () => {
+    // Same dir, accessed via "." should still yield the correct basename
+    // (not "" or "." which `basename(".")` would have returned).
+    const abs = mkdtempSync(join(tmpdir(), "deriveProjectKey-basename-"));
+    trackedKeys.push(abs);
+    const prev = process.cwd();
+    try {
+      process.chdir(abs);
+      const { project } = deriveProjectKey(".");
+      // basename(resolve(".")) === basename(abs)
+      expect(project).toBe(abs.split("/").pop());
+    } finally {
+      process.chdir(prev);
+    }
+  });
 });
 
 describe("normalizeGitRemoteUrl", () => {
