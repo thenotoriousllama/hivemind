@@ -47,7 +47,7 @@ export async function runAuthCommand(args: string[]): Promise<void> {
     }
 
     case "whoami": {
-      if (!creds) { console.log("Not logged in. Run: node auth-login.js login"); break; }
+      if (!creds) { console.log("Not logged in. Run: hivemind login"); break; }
       console.log(`User org: ${creds.orgName ?? creds.orgId}`);
       console.log(`Workspace: ${creds.workspaceId ?? "default"}`);
       console.log(`API: ${creds.apiUrl ?? "https://api.deeplake.ai"}`);
