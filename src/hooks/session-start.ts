@@ -26,6 +26,7 @@ import { renderLocalMinedNote } from "../skillify/local-mined-banner.js";
 import { maybeAutoMineLocal } from "../skillify/spawn-mine-local-worker.js";
 import { graphContextLine } from "../graph/session-context.js";
 import { spawnGraphPullWorker } from "../graph/spawn-pull-worker.js";
+import { entrypointPassesOnlyCliGate } from "./shared/capture-gate.js";
 const log = (msg: string) => _log("session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -189,13 +190,7 @@ async function main(): Promise<void> {
   // under capture=false. The renderer is read-only and runs
   // regardless; the rules table it queries is lazy-created by the
   // CLI write path (`hivemind rules add`).
-  // Allowlist gate: when HIVEMIND_CAPTURE_ONLY_CLI=true, capture only sessions
-  // whose CLAUDE_CODE_ENTRYPOINT contains "cli" (filters out Agent SDK spawns
-  // which set entrypoint to "sdk-py" / "sdk-ts").
-  const onlyCli = process.env.HIVEMIND_CAPTURE_ONLY_CLI === "true";
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? "";
-  const entrypointAllowed = !onlyCli || entrypoint.includes("cli");
-  const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false" && entrypointAllowed;
+  const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false" && entrypointPassesOnlyCliGate();
   let rulesBlock = "";
   if (input.session_id && creds?.token) {
     try {

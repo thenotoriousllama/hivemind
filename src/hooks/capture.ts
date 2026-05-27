@@ -31,6 +31,7 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { getInstalledVersion } from "../utils/version-check.js";
+import { entrypointPassesOnlyCliGate } from "./shared/capture-gate.js";
 const log = (msg: string) => _log("capture", msg);
 
 function resolveEmbedDaemonPath(): string {
@@ -72,16 +73,9 @@ interface HookInput {
 
 const CAPTURE = process.env.HIVEMIND_CAPTURE !== "false";
 
-// Allowlist gate: when HIVEMIND_CAPTURE_ONLY_CLI=true, only persist sessions
-// whose CLAUDE_CODE_ENTRYPOINT contains "cli". The Claude Agent SDK spawns
-// the CLI with entrypoint "sdk-py" / "sdk-ts", so those subprocesses get
-// filtered out without touching the interactive `cli` entrypoint.
-const ONLY_CLI = process.env.HIVEMIND_CAPTURE_ONLY_CLI === "true";
-const ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT ?? "";
-
 async function main(): Promise<void> {
   if (!CAPTURE) return;
-  if (ONLY_CLI && !ENTRYPOINT.includes("cli")) return;
+  if (!entrypointPassesOnlyCliGate()) return;
   const input = await readStdin<HookInput>();
   const config = loadConfig();
   if (!config) { log("no config"); return; }
