@@ -1,6 +1,6 @@
 {
   "name": "@deeplake/hivemind",
-  "version": "0.7.60",
+  "version": "0.7.61",
   "description": "Cloud-backed persistent shared memory for AI agents powered by Deeplake",
   "type": "module",
   "repository": {
@@ -26,6 +26,7 @@
     "openclaw/openclaw.plugin.json",
     "openclaw/package.json",
     ".claude-plugin",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
