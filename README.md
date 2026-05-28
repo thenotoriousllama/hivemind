@@ -11,14 +11,14 @@
 <h4 align="center">One brain for all your agents</h4>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@deeplake/hivemind"><img src="https://img.shields.io/npm/v/@deeplake/hivemind?color=blue&label=npm" alt="npm"></a>
-  <a href="https://github.com/activeloopai/hivemind/stargazers"><img src="https://img.shields.io/github/stars/activeloopai/hivemind?style=social" alt="GitHub stars"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg" alt="Node"></a>
-  <a href="https://deeplake.ai"><img src="https://img.shields.io/badge/Powered%20by-Deeplake-orange.svg" alt="Deeplake"></a>
-  <a href="https://www.ycombinator.com"><img src="https://img.shields.io/badge/Y%20Combinator-backed-ff6600.svg" alt="Y Combinator backed"></a>
-  <a href="https://discord.gg/EeGjnyDBx"><img src="https://img.shields.io/badge/Discord-chat-5865F2?logo=discord&logoColor=white" alt="Join us on Discord"></a>
-  <a href="https://join.slack.com/t/hubdb/shared_invite/zt-35zr0yil0-lnzJcQhACsBlB7~3lufrCg"><img src="https://img.shields.io/badge/Slack-chat-4A154B?logo=slack&logoColor=white" alt="Join us on Slack"></a>
+  <a href="https://www.npmjs.com/package/@deeplake/hivemind"><img src="https://img.shields.io/npm/v/@deeplake/hivemind?color=blue&label=npm&style=for-the-badge" alt="npm"></a>
+  <a href="https://github.com/activeloopai/hivemind/stargazers"><img src="https://img.shields.io/github/stars/activeloopai/hivemind?style=for-the-badge&logo=github" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="License"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg?style=for-the-badge" alt="Node"></a>
+  <a href="https://deeplake.ai"><img src="https://img.shields.io/badge/Powered%20by-Deeplake-orange.svg?style=for-the-badge" alt="Deeplake"></a>
+  <a href="https://www.ycombinator.com"><img src="https://img.shields.io/badge/Y%20Combinator-backed-ff6600.svg?style=for-the-badge" alt="Y Combinator backed"></a>
+  <a href="https://discord.gg/EeGjnyDBx"><img src="https://img.shields.io/badge/Discord-chat-5865F2?logo=discord&logoColor=white&style=for-the-badge" alt="Join us on Discord"></a>
+  <a href="https://join.slack.com/t/hubdb/shared_invite/zt-35zr0yil0-lnzJcQhACsBlB7~3lufrCg"><img src="https://img.shields.io/badge/Slack-chat-4A154B?logo=slack&logoColor=white&style=for-the-badge" alt="Join us on Slack"></a>
 </p>
 
 <p align="center">
@@ -403,6 +403,16 @@ Hivemind Cloud is the default. When that isn't enough, point Hivemind at storage
 Hivemind is built and maintained by [Activeloop](https://activeloop.ai) — the open-source team behind [Deeplake](https://github.com/activeloopai/deeplake), backed by Y Combinator.
 
 We run Hivemind ourselves, all day, across Claude Code, OpenClaw, Codex, and Cursor. Every benchmark number above came from our own internal eval against the LoCoMo public benchmark. If you're running coding agents at a team or org and want to talk through your setup, drop us a line: [hello@activeloop.ai](mailto:hello@activeloop.ai).
+
+## Got questions?
+
+Setup, BYOC, agent integrations, or workflow — come ask in the community. We hang out on both:
+
+<p align="center">
+  <a href="https://discord.gg/EeGjnyDBx"><img src="https://img.shields.io/badge/Join_us_on-Discord-5865F2?logo=discord&logoColor=white&style=for-the-badge" alt="Join us on Discord"></a>
+  &nbsp;
+  <a href="https://join.slack.com/t/hubdb/shared_invite/zt-35zr0yil0-lnzJcQhACsBlB7~3lufrCg"><img src="https://img.shields.io/badge/Join_us_on-Slack-4A154B?logo=slack&logoColor=white&style=for-the-badge" alt="Join us on Slack"></a>
+</p>
 
 ## Development
 
