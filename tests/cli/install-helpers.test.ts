@@ -96,6 +96,35 @@ describe("isHivemindHookEntry", () => {
     }, PD)).toBe(true);
   });
 
+  // Windows separator bug (2026-05-29): codex on Windows writes the hook
+  // command via join() with BACKSLASHES, but the matcher used forward-slash
+  // literals. Result: isHivemindHookEntry returned false on Windows, so
+  // re-install never stripped the prior entry and APPENDED a duplicate
+  // (PostToolUse capture ran twice — the reported bug). Failure-before-fix.
+  describe("Windows backslash paths (separator normalization)", () => {
+    const WPD = "C:\\Users\\angel\\.codex\\hivemind";
+
+    it("true when a backslash command points into <pluginDir>\\bundle\\ (canonical Windows install)", () => {
+      expect(isHivemindHookEntry({
+        hooks: [{ type: "command", command: `node "${WPD}\\bundle\\capture.js"`, timeout: 15 }],
+      }, WPD)).toBe(true);
+    });
+
+    it("true for each known bundle file written with backslashes", () => {
+      for (const f of ["session-start.js", "capture.js", "stop.js", "wiki-worker.js"]) {
+        expect(isHivemindHookEntry({
+          hooks: [{ type: "command", command: `node "C:\\some\\sibling\\bundle\\${f}"` }],
+        }, WPD)).toBe(true);
+      }
+    });
+
+    it("still false for a user's own backslash hook outside bundle/", () => {
+      expect(isHivemindHookEntry({
+        hooks: [{ type: "command", command: `node "C:\\Users\\angel\\.codex\\my-hook.js"` }],
+      }, WPD)).toBe(false);
+    });
+  });
+
   // Tightens the per-element type guard inside the `.some()` callback so a
   // refactor that drops `!h || typeof h !== "object"` can't start matching
   // arrays full of garbage.
@@ -176,6 +205,24 @@ describe("mergeHooks", () => {
     const hivemindCommands = allCommands.filter(c => c.includes(`${PD}/bundle/`));
     const unique = new Set(hivemindCommands);
     expect(hivemindCommands.length).toBe(unique.size);
+  });
+
+  // The end-to-end repro of the reported Windows bug: re-install on Windows
+  // (backslash commands) must strip the prior hivemind PostToolUse entry, not
+  // accumulate duplicates. Pre-fix this looped to 5 PostToolUse entries.
+  it("Windows backslash re-install: no PostToolUse duplication after N re-runs", () => {
+    const WPD = "C:\\Users\\angel\\.codex\\hivemind";
+    const winOurs = {
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: `node "${WPD}\\bundle\\session-start.js"`, timeout: 10 }] }],
+        PostToolUse:  [{ hooks: [{ type: "command", command: `node "${WPD}\\bundle\\capture.js"`,        timeout: 15 }] }],
+      },
+    };
+    let cur: Record<string, unknown> = {};
+    for (let i = 0; i < 5; i++) cur = mergeHooks(cur, winOurs, WPD);
+    const h = (cur as { hooks: Record<string, unknown[]> }).hooks;
+    expect(h.SessionStart).toHaveLength(1);
+    expect(h.PostToolUse).toHaveLength(1);
   });
 
   it("re-install with mixed prior (user + stale hivemind) keeps user, replaces stale", () => {
@@ -317,6 +364,12 @@ describe("isHivemindEntry (cursor)", () => {
 
   it("false when command points elsewhere", () => {
     expect(isHivemindEntry({ command: "/usr/local/bin/my-cursor-hook" })).toBe(false);
+  });
+
+  // Same Windows separator bug as codex: a backslash command must still match
+  // so cursor re-install on Windows strips the prior hooks instead of dup'ing.
+  it("true for a Windows backslash command into .cursor\\hivemind\\bundle\\", () => {
+    expect(isHivemindEntry({ command: `node "C:\\Users\\u\\.cursor\\hivemind\\bundle\\capture.js"` })).toBe(true);
   });
 
   it.each([

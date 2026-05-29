@@ -16,7 +16,11 @@ import type { Config } from "../../src/config.js";
  *   1. Reads the installed plugin version via getInstalledVersion(bundleDir, manifestDir)
  *      — the manifest dir differs per agent (".claude-plugin" / ".codex-plugin").
  *   2. Writes a config.json the detached worker reads at startup.
- *   3. Spawns `nohup node <worker.js> <config.json>`.
+ *   3. Spawns `<node> <worker.js> <config.json>` detached, via the shared
+ *      spawnDetachedNodeWorker helper. Cross-platform: it invokes the node
+ *      binary directly (process.execPath), NOT `nohup node ...` — `nohup` is
+ *      absent on Windows and the old form crashed the hook there with an
+ *      unhandled async ENOENT. See src/utils/spawn-detached.ts.
  *
  * The thing the e2e on test_plugin couldn't directly observe is whether
  * pluginVersion actually lands in config.json for every agent. A regression
@@ -37,9 +41,14 @@ vi.mock("node:child_process", async () => {
     ...actual,
     spawn: vi.fn((cmd: string, args: readonly string[]) => {
       spawnCalls.push({ cmd, args });
-      // Match the surface the production code touches: a child object
-      // with `.unref()`. No stdio, no event emission.
-      return { unref: () => {} } as unknown as ReturnType<typeof actual.spawn>;
+      // Match the surface the production code touches: a child object with
+      // `.on("error", ...)` (the helper installs an async-ENOENT absorber
+      // before unref'ing) and `.unref()`. `.on` returns the child for chaining.
+      const child: { on: () => typeof child; unref: () => void } = {
+        on: () => child,
+        unref: () => {},
+      };
+      return child as unknown as ReturnType<typeof actual.spawn>;
     }),
   };
 });
@@ -105,7 +114,9 @@ function fakeConfig(): Config {
 
 function readSpawnedConfig(): Record<string, unknown> {
   expect(spawnCalls).toHaveLength(1);
-  const [, , configPath] = spawnCalls[0].args;
+  // argv is now [workerPath, configPath] (spawn(node, [worker, config])),
+  // so the config path is index 1 — previously index 2 under `nohup node ...`.
+  const [, configPath] = spawnCalls[0].args;
   return JSON.parse(readFileSync(configPath as string, "utf-8"));
 }
 
@@ -145,7 +156,7 @@ describe("spawnWikiWorker (claude-code) — plugin_version threading", () => {
     expect(cfg.pluginVersion).toBe("");
   });
 
-  it("spawns the worker with nohup + the written config path", () => {
+  it("spawns the node binary directly (NOT nohup) with worker + config path", () => {
     const { bundleDir } = plantBundle(".claude-plugin");
     spawnWikiWorker({
       config: fakeConfig(),
@@ -156,10 +167,12 @@ describe("spawnWikiWorker (claude-code) — plugin_version threading", () => {
     });
     expect(spawnCalls).toHaveLength(1);
     const [{ cmd, args }] = spawnCalls;
-    expect(cmd).toBe("nohup");
-    expect(args[0]).toBe("node");
-    expect(args[1]).toBe(join(bundleDir, "wiki-worker.js"));
-    expect((args[2] as string).endsWith("config.json")).toBe(true);
+    // Cross-platform fix: invoke node via process.execPath, never `nohup`
+    // (which ENOENT-crashes the hook on Windows). argv = [worker, config].
+    expect(cmd).toBe(process.execPath);
+    expect(cmd).not.toBe("nohup");
+    expect(args[0]).toBe(join(bundleDir, "wiki-worker.js"));
+    expect((args[1] as string).endsWith("config.json")).toBe(true);
   });
 });
 

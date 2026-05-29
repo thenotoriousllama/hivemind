@@ -4,7 +4,7 @@
  * and shells `hermes -z` (oneshot mode) instead of `codex exec`.
  */
 
-import { spawn, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -12,6 +12,8 @@ import { homedir, tmpdir } from "node:os";
 import type { Config } from "../../config.js";
 import { makeWikiLogger } from "../../utils/wiki-log.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
+import { spawnDetachedNodeWorker } from "../../utils/spawn-detached.js";
+import { projectNameFromCwd } from "../../utils/project-name.js";
 
 const HOME = homedir();
 const wikiLogger = makeWikiLogger(join(HOME, ".hermes", "hooks"));
@@ -87,7 +89,7 @@ export interface SpawnOptions {
 
 export function spawnHermesWikiWorker(opts: SpawnOptions): void {
   const { config, sessionId, cwd, bundleDir, reason } = opts;
-  const projectName = cwd.split("/").pop() || "unknown";
+  const projectName = projectNameFromCwd(cwd);
 
   const tmpDir = join(tmpdir(), `deeplake-wiki-${sessionId}-${Date.now()}`);
   mkdirSync(tmpDir, { recursive: true });
@@ -118,10 +120,7 @@ export function spawnHermesWikiWorker(opts: SpawnOptions): void {
   wikiLog(`${reason}: spawning summary worker for ${sessionId}`);
 
   const workerPath = join(bundleDir, "wiki-worker.js");
-  spawn("nohup", ["node", workerPath, configFile], {
-    detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
-  }).unref();
+  spawnDetachedNodeWorker(workerPath, [configFile]);
 
   wikiLog(`${reason}: spawned summary worker for ${sessionId}`);
 }

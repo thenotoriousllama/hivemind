@@ -13,6 +13,7 @@ import { loadCredentials, saveCredentials, healDriftedOrgToken } from "../comman
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlStr } from "../utils/sql.js";
+import { projectNameFromCwd } from "../utils/project-name.js";
 import { readStdin } from "../utils/stdin.js";
 import { log as _log } from "../utils/debug.js";
 import { getInstalledVersion } from "../utils/version-check.js";
@@ -98,7 +99,7 @@ async function createPlaceholder(api: DeeplakeApi, table: string, sessionId: str
   }
 
   const now = new Date().toISOString();
-  const projectName = cwd.split("/").pop() ?? "unknown";
+  const projectName = projectNameFromCwd(cwd);
   const sessionSource = `/sessions/${userName}/${userName}_${orgName}_${workspaceId}_${sessionId}.jsonl`;
   const content = [
     `# Session ${sessionId}`,

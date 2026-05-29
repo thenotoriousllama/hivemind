@@ -58,7 +58,12 @@ function buildHookConfig(): Record<string, CursorHookEntry[]> {
 export function isHivemindEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") return false;
   const cmd = (entry as { command?: string }).command;
-  return typeof cmd === "string" && cmd.includes("/.cursor/hivemind/bundle/");
+  if (typeof cmd !== "string") return false;
+  // Normalize separators: on Windows the command is written with backslashes
+  // (`...\.cursor\hivemind\bundle\capture.js`), so a forward-slash-only match
+  // would fail and re-install would duplicate the hooks (same Windows bug as
+  // codex's isHivemindHookEntry).
+  return cmd.replace(/\\/g, "/").includes("/.cursor/hivemind/bundle/");
 }
 
 function mergeHooks(existing: Record<string, unknown> | null): Record<string, unknown> {

@@ -18,6 +18,7 @@ import { readStdin } from "../../utils/stdin.js";
 import { loadConfig } from "../../config.js";
 import { DeeplakeApi } from "../../deeplake-api.js";
 import { sqlStr } from "../../utils/sql.js";
+import { projectNameFromCwd } from "../../utils/project-name.js";
 import { log as _log } from "../../utils/debug.js";
 import { bundleDirFromImportMeta, spawnCodexWikiWorker, wikiLog } from "./spawn-wiki-worker.js";
 import { forceSessionEndTrigger } from "../../skillify/triggers.js";
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
       };
       const line = JSON.stringify(entry);
       const sessionPath = buildSessionPath(config, sessionId);
-      const projectName = (input.cwd ?? "").split("/").pop() || "unknown";
+      const projectName = projectNameFromCwd(input.cwd);
       const filename = sessionPath.split("/").pop() ?? "";
       // For JSONB: only escape single quotes for the SQL literal, keep JSON structure intact.
       // sqlStr() would also escape backslashes and strip control chars, corrupting the JSON.

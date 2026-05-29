@@ -16,6 +16,7 @@ import { loadConfig } from "../../config.js";
 import { DeeplakeApi } from "../../deeplake-api.js";
 import { renderContextBlock } from "../shared/context-renderer.js";
 import { sqlStr } from "../../utils/sql.js";
+import { projectNameFromCwd } from "../../utils/project-name.js";
 import { renderSkillifyCommands } from "../../cli/skillify-spec.js";
 import { countLocalManifestEntries } from "../../skillify/local-manifest.js";
 import { maybeAutoMineLocal } from "../../skillify/spawn-mine-local-worker.js";
@@ -85,7 +86,7 @@ async function createPlaceholder(
   if (existing.length > 0) return;
 
   const now = new Date().toISOString();
-  const projectName = cwd.split("/").pop() ?? "unknown";
+  const projectName = projectNameFromCwd(cwd);
   const sessionSource = `/sessions/${userName}/${userName}_${orgName}_${workspaceId}_${sessionId}.jsonl`;
   const content = [
     `# Session ${sessionId}`,
