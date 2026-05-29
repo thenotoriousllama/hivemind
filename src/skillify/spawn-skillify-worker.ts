@@ -7,7 +7,6 @@
  * skill write) happens in the detached child.
  */
 
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, appendFileSync, chmodSync } from "node:fs";
@@ -15,6 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import type { Config } from "../config.js";
 import { utcTimestamp } from "../utils/debug.js";
 import { findAgentBin, type Agent } from "./gate-runner.js";
+import { spawnDetachedNodeWorker } from "../utils/spawn-detached.js";
 
 const HOME = homedir();
 export const SKILLIFY_LOG = join(HOME, ".claude", "hooks", "skillify.log");
@@ -93,10 +93,7 @@ export function spawnSkillifyWorker(opts: SkillifySpawnOptions): void {
   skillifyLog(`${reason}: spawning skillify worker for project=${project} key=${projectKey}`);
 
   const workerPath = join(bundleDir, "skillify-worker.js");
-  spawn("nohup", ["node", workerPath, configFile], {
-    detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
-  }).unref();
+  spawnDetachedNodeWorker(workerPath, [configFile]);
 
   skillifyLog(`${reason}: spawned skillify worker for ${projectKey}`);
 }

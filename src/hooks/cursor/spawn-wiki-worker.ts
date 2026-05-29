@@ -3,7 +3,7 @@
  * Mirrors src/hooks/spawn-wiki-worker.ts but targets ~/.codex/ paths and codexBin.
  */
 
-import { spawn, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -11,6 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import type { Config } from "../../config.js";
 import { makeWikiLogger } from "../../utils/wiki-log.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
+import { spawnDetachedNodeWorker } from "../../utils/spawn-detached.js";
 
 const HOME = homedir();
 const wikiLogger = makeWikiLogger(join(HOME, ".cursor", "hooks"));
@@ -116,10 +117,7 @@ export function spawnCursorWikiWorker(opts: SpawnOptions): void {
   wikiLog(`${reason}: spawning summary worker for ${sessionId}`);
 
   const workerPath = join(bundleDir, "wiki-worker.js");
-  spawn("nohup", ["node", workerPath, configFile], {
-    detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
-  }).unref();
+  spawnDetachedNodeWorker(workerPath, [configFile]);
 
   wikiLog(`${reason}: spawned summary worker for ${sessionId}`);
 }
