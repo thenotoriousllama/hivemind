@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -98,6 +98,44 @@ describe("installCodex — happy path", () => {
     // PreToolUse carries the Bash matcher.
     expect(hooks.hooks.PreToolUse[0].matcher).toBe("Bash");
     expect(hooks.hooks.PreToolUse[0].hooks[0].timeout).toBe(10);
+  });
+
+  it("is idempotent: a second install does NOT rewrite hooks.json (avoids Codex re-trust prompt)", async () => {
+    const { installCodex } = await importInstaller();
+    installCodex();
+    const hooksPath = join(tmpHome, ".codex", "hooks.json");
+    const content1 = readFileSync(hooksPath, "utf-8");
+
+    // Pin mtime to the past — a real rewrite would bump it to ~now. This is
+    // the regression guard: pre-fix, install() always rewrote the file, which
+    // re-triggered Codex's "Hooks need review" prompt on every install/update.
+    const past = new Date("2020-01-01T00:00:00Z");
+    utimesSync(hooksPath, past, past);
+
+    installCodex(); // re-install, same version/bundle → merged result identical
+
+    expect(readFileSync(hooksPath, "utf-8")).toBe(content1); // content stable
+    expect(statSync(hooksPath).mtimeMs).toBe(past.getTime()); // file NOT rewritten
+  });
+
+  it("DOES rewrite hooks.json when a stale/foreign entry must be merged out (write path still works)", async () => {
+    const { installCodex } = await importInstaller();
+    const hooksPath = join(tmpHome, ".codex", "hooks.json");
+    // Pre-seed a hooks.json that differs from the canonical install result
+    // (a user's own hook on an event we don't claim) so the merge changes it.
+    writeFileSync(hooksPath, JSON.stringify({
+      hooks: { Notification: [{ hooks: [{ type: "command", command: "/usr/local/bin/notify.sh" }] }] },
+    }, null, 2) + "\n");
+    const past = new Date("2020-01-01T00:00:00Z");
+    utimesSync(hooksPath, past, past);
+
+    installCodex();
+
+    // It rewrote (mtime moved) and the user's hook survived alongside ours.
+    expect(statSync(hooksPath).mtimeMs).not.toBe(past.getTime());
+    const merged = JSON.parse(readFileSync(hooksPath, "utf-8"));
+    expect(merged.hooks.Notification).toHaveLength(1);
+    expect(merged.hooks.PostToolUse).toHaveLength(1);
   });
 
   it("creates the agentskills symlink at ~/.agents/skills/hivemind-memory", async () => {

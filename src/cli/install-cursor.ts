@@ -1,6 +1,6 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { HOME, pkgRoot, ensureDir, copyDir, readJson, writeJson, writeVersionStamp, log } from "./util.js";
+import { HOME, pkgRoot, ensureDir, copyDir, readJson, writeJson, writeJsonIfChanged, writeVersionStamp, log } from "./util.js";
 import { getVersion } from "./version.js";
 
 // Cursor 1.7+ hooks API: https://cursor.com/docs/agent/hooks
@@ -105,7 +105,9 @@ export function installCursor(): void {
 
   const existing = readJson<Record<string, unknown>>(HOOKS_PATH);
   const merged = mergeHooks(existing);
-  writeJson(HOOKS_PATH, merged);
+  // Idempotent (same rationale as codex): skip the rewrite when unchanged so
+  // we don't perturb the hooks.json Cursor/Codex-style trust fingerprints.
+  writeJsonIfChanged(HOOKS_PATH, merged);
 
   writeVersionStamp(PLUGIN_DIR, getVersion());
   log(`  Cursor         installed -> ${PLUGIN_DIR}`);

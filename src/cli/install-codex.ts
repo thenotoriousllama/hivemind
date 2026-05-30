@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { HOME, pkgRoot, ensureDir, copyDir, writeJson, symlinkForce, writeVersionStamp, log, warn } from "./util.js";
+import { HOME, pkgRoot, ensureDir, copyDir, writeJson, writeJsonIfChanged, symlinkForce, writeVersionStamp, log, warn } from "./util.js";
 import { getVersion } from "./version.js";
 
 const CODEX_HOME = join(HOME, ".codex");
@@ -225,7 +225,14 @@ export function installCodex(): void {
   if (existsSync(srcSkills)) copyDir(srcSkills, join(PLUGIN_DIR, "skills"));
 
   tryEnableCodexHooks();
-  writeJson(HOOKS_PATH, mergeHooksJson(buildHooksJson()));
+  // Idempotent: only rewrite hooks.json when the merged result actually
+  // changed. An unconditional rewrite (even byte-identical) changes the file
+  // Codex fingerprints and re-triggers its "Hooks need review" trust prompt on
+  // every install/update. Skipping the no-op write keeps the user from being
+  // re-prompted each time.
+  if (!writeJsonIfChanged(HOOKS_PATH, mergeHooksJson(buildHooksJson()))) {
+    log(`  Codex          hooks.json unchanged — skipped rewrite (no re-trust prompt)`);
+  }
 
   ensureDir(AGENTS_SKILLS_DIR);
   const skillTarget = join(PLUGIN_DIR, "skills", "deeplake-memory");

@@ -59,6 +59,29 @@ export function writeJson(path: string, obj: unknown): void {
   writeFileSync(path, JSON.stringify(obj, null, 2) + "\n");
 }
 
+/**
+ * Write JSON only if the serialized result differs from what's already on
+ * disk. Returns true if it wrote, false if the file already matched.
+ *
+ * Why: Codex fingerprints each hook *definition* and re-prompts the user to
+ * "review & trust" whenever a hook it sees has changed. Our installer used to
+ * rewrite hooks.json unconditionally on every install/update — even when the
+ * merged result was byte-identical — which re-triggered that trust prompt for
+ * no reason. Skipping the write when nothing changed keeps the file (and its
+ * fingerprint) stable, so Codex stops re-asking after the first trust.
+ */
+export function writeJsonIfChanged(path: string, obj: unknown): boolean {
+  const next = JSON.stringify(obj, null, 2) + "\n";
+  if (existsSync(path)) {
+    try {
+      if (readFileSync(path, "utf-8") === next) return false; // unchanged → no write
+    } catch { /* unreadable → fall through and rewrite */ }
+  }
+  ensureDir(dirname(path));
+  writeFileSync(path, next);
+  return true;
+}
+
 export function writeVersionStamp(dir: string, version: string): void {
   ensureDir(dir);
   writeFileSync(join(dir, ".hivemind_version"), version);
