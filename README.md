@@ -176,7 +176,7 @@ Restart Codex to activate.
 
 **First launch — trust the hooks.** Codex shows a **"Hooks need review"** prompt before it will run hivemind's hooks:
 
-```
+```text
 Hooks need review
 2 hooks are new or changed.
 Hooks can run outside the sandbox after you trust them.
