@@ -320,7 +320,10 @@ jobs:
           npm publish --provenance --access public
 
       - name: Install ClawHub CLI
-        run: npm install -g clawhub
+        # Pin the CLI version: it runs immediately before `clawhub login --token`
+        # with the real CLAWHUB_TOKEN in env, so a floating `@latest` would let an
+        # unexpected publish read/exfiltrate the token. Bump deliberately.
+        run: npm install -g clawhub@0.18.0
 
       - name: Authenticate ClawHub CLI
         # `clawhub login --token` writes a credential file inside the
