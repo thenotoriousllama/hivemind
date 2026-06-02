@@ -77,7 +77,10 @@ jobs:
         run: npm publish --dry-run --provenance --access public
 
       - name: Install ClawHub CLI
-        run: npm install -g clawhub
+        # Pinned (matches release.yaml): the CLI runs right before
+        # `clawhub login --token`, so a floating @latest would let an
+        # unexpected publish read/exfiltrate the token.
+        run: npm install -g clawhub@0.18.0
 
       - name: Authenticate ClawHub CLI
         run: clawhub login --token "$CLAWHUB_TOKEN" --no-browser
