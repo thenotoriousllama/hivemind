@@ -171,7 +171,7 @@ export async function pickPrimaryBanner(
       prefix = cold.brief;
       firstRun = cold.firstRun;
     } else {
-      prefix = (await pickResumeBrief(creds))?.brief ?? null;
+      prefix = (await pickResumeBrief(creds, sessionId))?.brief ?? null;
     }
   } catch (e: unknown) {
     log(`session brief threw: ${(e as Error).message}`);

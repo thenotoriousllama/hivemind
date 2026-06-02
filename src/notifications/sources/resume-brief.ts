@@ -14,16 +14,14 @@
  *
  * Resolution (newest-first over the last LOOKBACK summaries):
  *   1. First session with real open work → "you left off here: <next step>"
- *      + a pick-it-up call to action.
- *   2. Summaries exist but every recent session wrapped clean → a brief with
- *      NO call to action ("wrapped up clean, nothing pending") — we don't
- *      invent an action that isn't there.
- *   3. No summaries for this project at all → null; the caller renders the
- *      plain welcome (no whiff).
+ *      + the owning session id + a pick-it-up call to action.
+ *   2. Otherwise (no open work anywhere, or no summaries at all) → null; the
+ *      caller renders the plain welcome. We stay silent rather than surface a
+ *      "nothing pending" line, and never reach back to an older stale TODO.
  *
  * "Open work" comes from the summary's `## Next Steps` section (preferred)
- * or the older `## Open Questions / TODO`. An empty / "none" section counts
- * as wrapped-clean.
+ * or the older `## Open Questions / TODO`. An empty / "none" / "none — <prose>"
+ * section counts as wrapped-clean and is skipped.
  *
  * userVisibleOnly: the caller renders this in the user's terminal only,
  * never the model's additionalContext.
@@ -36,6 +34,7 @@ import { DeeplakeApi } from "../../deeplake-api.js";
 import { loadConfig } from "../../config.js";
 import { sqlStr, sqlIdent } from "../../utils/sql.js";
 import { projectNameFromCwd } from "../../utils/project-name.js";
+import { isSessionLive } from "../../hooks/summary-state.js";
 import { log as _log } from "../../utils/debug.js";
 
 const log = (m: string) => _log("notifications-resume-brief", m);
@@ -105,8 +104,12 @@ function sections(summary: string): Map<string, string> {
   return map;
 }
 
-/** Treat these as "nothing left" even when the section is present. */
-const EMPTY_SECTION = /^(none|n\/?a|n\.a\.|nothing|nothing pending|tbd|—|-)\.?$/i;
+/** Treat these as "nothing left" even when the section is present. Matches the
+ *  bare tokens ("None", "N/A", "TBD") AND a token followed by a trailing clause
+ *  introduced by punctuation or a dash ("None — feature complete", "N/A, all
+ *  shipped", "Nothing pending."). A token followed by a *word* ("None of the
+ *  tests pass yet") is real open work and deliberately does NOT match. */
+const EMPTY_SECTION = /^(none|n\/?a|n\.a\.|nothing(?: pending)?|tbd|—|–|-)\s*(?:[—–\-.,;:].*)?$/i;
 
 /**
  * The "what to resume" pointer for one summary, or "" when the session
@@ -152,6 +155,39 @@ export interface SummaryRow {
 }
 
 /**
+ * Session id from a summary row path. Paths are `/summaries/<user>/<sid>.md`;
+ * we take the final segment without the `.md` suffix. Returns "" when the
+ * path is empty or unrecognizable, so the caller keeps such rows (it can't
+ * prove they belong to a live session).
+ */
+export function sessionIdFromSummaryPath(path: string): string {
+  const base = path.split("/").pop() ?? "";
+  return base.endsWith(".md") ? base.slice(0, -3) : base;
+}
+
+/**
+ * Drop rows that belong to the CURRENT session or to any OTHER session that is
+ * still live right now — a resume brief must point at finished work, never at
+ * a session open in another terminal (which gets periodic summaries written
+ * mid-flight and would otherwise be the newest "real" row). Rows with no
+ * identifiable session id are kept. `isLive` is injected for testability.
+ */
+export function excludeActiveSessions(
+  rows: SummaryRow[],
+  currentSessionId: string | undefined,
+  isLive: (sessionId: string) => boolean = isSessionLive,
+): SummaryRow[] {
+  return rows.filter((row) => {
+    const path = typeof row.path === "string" ? row.path : "";
+    if (!path) return true;
+    const sid = sessionIdFromSummaryPath(path);
+    if (!sid) return true;
+    if (currentSessionId && sid === currentSessionId) return false;
+    return !isLive(sid);
+  });
+}
+
+/**
  * From raw newest-first rows, keep the most recent REAL summary per session
  * (dedup by path), drop placeholders, and cap at `lookback`. Pure so the
  * windowing — the part that was silently broken — is unit-testable without
@@ -160,19 +196,30 @@ export interface SummaryRow {
 export function selectRealSummaries(
   rows: SummaryRow[],
   lookback = LOOKBACK,
-): { summary: string; date: string | undefined }[] {
+): { summary: string; date: string | undefined; sid: string }[] {
   const seenPath = new Set<string>();
-  const out: { summary: string; date: string | undefined }[] = [];
+  const out: { summary: string; date: string | undefined; sid: string }[] = [];
   for (const row of rows) {
     const path = typeof row.path === "string" ? row.path : "";
     if (path && seenPath.has(path)) continue; // duplicate row for a session we already took
     if (path) seenPath.add(path);
     const summary = typeof row.summary === "string" ? row.summary : "";
     if (isPlaceholderSummary(summary)) continue; // SessionStart skeleton — skip
-    out.push({ summary, date: typeof row.last_update_date === "string" ? row.last_update_date : undefined });
+    out.push({
+      summary,
+      date: typeof row.last_update_date === "string" ? row.last_update_date : undefined,
+      sid: sessionIdFromSummaryPath(path),
+    });
     if (out.length >= lookback) break;
   }
   return out;
+}
+
+/** A one-line session-id pointer for the brief (trailing newline included), or
+ *  "" when we have no id. The full id is shown so it's copy-pasteable straight
+ *  into `claude --resume <id>`. */
+function sidLine(sid: string): string {
+  return sid ? `   ↳ session ${sid}\n` : "";
 }
 
 function truncate(s: string, max = MAX_LINE_CHARS): string {
@@ -202,9 +249,14 @@ function relativeAge(iso: string | undefined): string {
  * Build the resume brief for a signed-in user, or null. Only called with
  * non-null creds — the gate lives in the caller (primary-banner), which
  * routes anonymous users to the signup brief instead.
+ *
+ * `currentSessionId` (this session) is always excluded, and so is any OTHER
+ * session that is still live — a resume brief points at finished work, never
+ * at a session open in another terminal right now.
  */
 export async function pickResumeBrief(
   creds: Credentials | null | undefined,
+  currentSessionId?: string,
 ): Promise<ResumeBrief | null> {
   if (!creds?.token || !creds.userName || !creds.orgId) return null;
 
@@ -249,9 +301,14 @@ export async function pickResumeBrief(
       return null; // outcome 3 — plain welcome
     }
 
+    // Drop this session and any other session that is still live before
+    // windowing, so a session open in another terminal can't be surfaced as
+    // "where you left off".
+    const rows = excludeActiveSessions(rawRows as SummaryRow[], currentSessionId);
+
     // Dedup by session + drop placeholders so the walk-back lands on real
     // summaries instead of in-progress skeletons.
-    const reals = selectRealSummaries(rawRows as SummaryRow[]);
+    const reals = selectRealSummaries(rows);
     if (reals.length === 0) {
       log(`silent (only placeholders for project=${project})`);
       return null; // no real summary yet — don't claim "wrapped clean"
@@ -268,16 +325,17 @@ export async function pickResumeBrief(
           brief:
             `Picking up on ${project}${when} — you left off here:\n` +
             `   📌 ${next}\n` +
+            sidLine(r.sid) +
             `   Ask me for the full thread whenever you're ready.`,
         }; // outcome 1 — with CTA
       }
     }
 
-    // outcome 2 — real summaries exist, but every recent session wrapped clean.
-    const age = relativeAge(reals[0].date);
-    const when = age ? ` ${age}` : "";
-    log(`fired (project=${project}, no open work)`);
-    return { brief: `Picking up on ${project} — last session${when} wrapped up clean, nothing pending.` };
+    // Every recent session wrapped clean (no open work): stay silent — the
+    // caller renders the plain welcome. We don't surface a "nothing pending"
+    // line, and we never reach back to an older session's stale TODO.
+    log(`silent (project=${project}, no open work in last ${LOOKBACK})`);
+    return null;
   } catch (e: unknown) {
     log(`pickResumeBrief: ${(e as Error).message}`);
     return null;

@@ -21,6 +21,7 @@ const spawnMock = vi.fn();
 const wikiLogMock = vi.fn();
 const tryAcquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
+const markSessionEndedMock = vi.fn();
 const debugLogMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
@@ -33,6 +34,7 @@ vi.mock("../../src/hooks/spawn-wiki-worker.js", () => ({
 vi.mock("../../src/hooks/summary-state.js", () => ({
   tryAcquireLock: (...a: any[]) => tryAcquireLockMock(...a),
   releaseLock: (...a: any[]) => releaseLockMock(...a),
+  markSessionEnded: (...a: any[]) => markSessionEndedMock(...a),
 }));
 vi.mock("../../src/utils/debug.js", () => ({
   log: (_tag: string, msg: string) => debugLogMock(msg),
@@ -61,6 +63,7 @@ beforeEach(() => {
   wikiLogMock.mockReset();
   tryAcquireLockMock.mockReset().mockReturnValue(true);
   releaseLockMock.mockReset();
+  markSessionEndedMock.mockReset();
   debugLogMock.mockReset();
 });
 
@@ -105,6 +108,18 @@ describe("session-end hook", () => {
     expect(wikiLogMock).toHaveBeenCalledWith(
       expect.stringContaining("periodic worker already running for sid-1, skipping"),
     );
+  });
+
+  it("marks the session ended (so other sessions stop treating it as live) even when the lock is held", async () => {
+    tryAcquireLockMock.mockReturnValue(false);
+    await runHook();
+    expect(markSessionEndedMock).toHaveBeenCalledWith("sid-1");
+  });
+
+  it("does not mark ended when session_id is missing", async () => {
+    stdinMock.mockResolvedValue({ session_id: "", cwd: "/proj" });
+    await runHook();
+    expect(markSessionEndedMock).not.toHaveBeenCalled();
   });
 
   it("spawns the wiki worker on the happy path and logs 'triggering summary'", async () => {
