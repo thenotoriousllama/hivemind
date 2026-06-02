@@ -231,6 +231,9 @@ jobs:
           # commit the reviewer never approved.
           ref: ${{ needs.release.outputs.sha }}
           fetch-depth: 1
+          # Publish reads a pinned SHA and never pushes; don't leave
+          # GITHUB_TOKEN in .git/config.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6.4.0
