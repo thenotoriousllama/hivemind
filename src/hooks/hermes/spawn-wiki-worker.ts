@@ -66,7 +66,7 @@ Format: **entity** (type) — what was done with it, its current state>
 <Anything unresolved, blocked, or explicitly deferred>
 
 ## Next Steps
-<The single concrete next action to resume with, as one imperative line (e.g. "Wire the resume-brief Next Steps fallback and run the tests"). If the session reached a clean stopping point with nothing pending, write exactly: none>
+<The single concrete next action to resume the SUBSTANTIVE work, as one imperative line (e.g. "Wire the resume-brief Next Steps fallback and run the tests"). When the session's core was substantive (a feature, fix, investigation, design), treat administrative wrap-up — committing, pushing, opening or merging a PR, deploying, monitoring CI/checks — as ALREADY DONE; never write it as the next step. If the only thing left is such wrap-up, or nothing is pending, write exactly: none. Administrative actions count as a real next step ONLY when the session's core purpose itself was that release/ops task.>
 
 IMPORTANT: Be exhaustive. Extract EVERY entity, decision, and fact.
 PRIVACY: Never include absolute filesystem paths in the summary.
