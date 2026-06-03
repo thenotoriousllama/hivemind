@@ -30,6 +30,10 @@ import { readLastBuild } from "./last-build.js";
 import { repoDir } from "./snapshot.js";
 import { deriveProjectKey } from "../utils/repo-identity.js";
 import type { GraphSnapshot, GraphNode, GraphEdge } from "./types.js";
+import { renderNeighborhood } from "./render/neighborhood.js";
+import { renderLayers } from "./render/layers.js";
+import { renderTour } from "./render/tour.js";
+import { renderPath } from "./render/path.js";
 
 function workTreeIdFor(cwd: string): string {
   return createHash("sha256").update(cwd).digest("hex").slice(0, 16);
@@ -91,9 +95,45 @@ export function handleGraphVfs(subpath: string, cwd: string): GraphVfsResult {
     }));
   }
 
+  // neighborhood/<file> — symbols in a file + its cross-file neighbors.
+  if (path.startsWith("neighborhood/")) {
+    const file = path.slice("neighborhood/".length);
+    if (file === "") {
+      return { kind: "not-found", message: "neighborhood/ requires a file path: cat memory/graph/neighborhood/<file>" };
+    }
+    return loadSnapshotOrError(cwd, (snap) => ({ kind: "ok", body: renderNeighborhood(snap, file) }));
+  }
+
+  // layers[/] — architectural subsystem grouping by path heuristic.
+  if (path === "layers" || path === "layers/" || path === "layers/index.md") {
+    return loadSnapshotOrError(cwd, (snap) => ({ kind: "ok", body: renderLayers(snap) }));
+  }
+
+  // tour[/index.md] — deterministic dependency-ordered walkthrough.
+  if (path === "tour" || path === "tour/" || path === "tour/index.md") {
+    return loadSnapshotOrError(cwd, (snap) => ({ kind: "ok", body: renderTour(snap) }));
+  }
+
+  // path/<from>/<to> — shortest path between two symbol patterns. Both are
+  // SUBSTRING patterns matched against node id + label (renderPath resolves
+  // them), so a bare symbol name is enough — you don't need the file-qualified
+  // id, and the `from` pattern therefore shouldn't contain a slash. We split
+  // on the first slash after the prefix; if `from` needs a slash, use a
+  // narrower unique substring instead.
+  if (path.startsWith("path/")) {
+    const rest = path.slice("path/".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0 || slash === rest.length - 1) {
+      return { kind: "not-found", message: "path/ needs two patterns: cat memory/graph/path/<from>/<to> (each a symbol-name substring, no slash)" };
+    }
+    const fromPattern = rest.slice(0, slash);
+    const toPattern = rest.slice(slash + 1);
+    return loadSnapshotOrError(cwd, (snap) => ({ kind: "ok", body: renderPath(snap, fromPattern, toPattern) }));
+  }
+
   return {
     kind: "not-found",
-    message: `Unknown endpoint: graph/${path}\nAvailable: index.md, find/<pattern>, show/<handle-or-pattern>`,
+    message: `Unknown endpoint: graph/${path}\nAvailable: index.md, find/<pattern>, show/<handle-or-pattern>, neighborhood/<file>, layers, tour, path/<from>/<to>`,
   };
 }
 
@@ -160,6 +200,10 @@ function dirListing(): string {
     "index.md",
     "find/",
     "show/",
+    "neighborhood/",
+    "layers",
+    "tour",
+    "path/",
   ].join("\n");
 }
 

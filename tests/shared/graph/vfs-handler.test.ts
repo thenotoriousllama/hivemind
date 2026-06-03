@@ -293,6 +293,91 @@ describe("handleGraphVfs", () => {
       expect(r.body).toContain("index.md");
       expect(r.body).toContain("find/");
       expect(r.body).toContain("show/");
+      // M-render endpoints advertised in the listing
+      expect(r.body).toContain("neighborhood/");
+      expect(r.body).toContain("layers");
+      expect(r.body).toContain("tour");
+      expect(r.body).toContain("path/");
+    }
+  });
+
+  // ── render endpoints (team graph-render) ──────────────────────────────
+  // These prove the dispatcher routes the new subpaths to the render
+  // modules; the modules' own logic is covered by their unit tests.
+
+  it("neighborhood/<file> renders symbols + cross-file neighbors", () => {
+    seed();
+    const r = handleGraphVfs("neighborhood/src/a.ts", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.body).toContain("Symbols in src/a.ts");
+      expect(r.body).toContain("foo");
+    }
+  });
+
+  it("neighborhood/ with no file → not-found", () => {
+    const r = handleGraphVfs("neighborhood/", cwd);
+    expect(r.kind).toBe("not-found");
+  });
+
+  it("layers renders the architectural grouping", () => {
+    seed();
+    const r = handleGraphVfs("layers", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") expect(r.body.toLowerCase()).toContain("layer");
+  });
+
+  it("tour renders a dependency-ordered walkthrough", () => {
+    seed();
+    const r = handleGraphVfs("tour", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") expect(r.body.toLowerCase()).toContain("tour");
+  });
+
+  it("path/<from>/<to> renders a path or a clear no-path/ambiguous message", () => {
+    seed();
+    const r = handleGraphVfs("path/foo/UserModel", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") expect(typeof r.body).toBe("string");
+  });
+
+  it("path/ with a single pattern → not-found guidance", () => {
+    const r = handleGraphVfs("path/onlyone", cwd);
+    expect(r.kind).toBe("not-found");
+    if (r.kind === "not-found") expect(r.message).toContain("two patterns");
+  });
+
+  // ── codex review regressions on the render modules ────────────────────
+
+  it("tour: an exported node whose only incoming edge is from an UNRESOLVED source stays an entry point", () => {
+    // Seed a custom snapshot: src/a.ts:foo is exported, its only incoming edge
+    // comes from an id NOT in nodes[] (an external/unresolved caller).
+    mkdirSync(snapshotsDir, { recursive: true });
+    const snap = makeSnapshot("c1");
+    snap.links = [{ source: "external:ghost:function", target: "src/a.ts:foo:function", relation: "calls", confidence: "EXTRACTED" }];
+    writeFileSync(join(snapshotsDir, "c1.json"), JSON.stringify(snap));
+    writeLastBuild(baseDir, { ts: Date.now(), commit_sha: "c1", snapshot_sha256: "z".repeat(64), node_count: snap.nodes.length, edge_count: 1 }, wt);
+    const r = handleGraphVfs("tour", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      // foo must appear under Entry points, not be suppressed by the phantom caller.
+      const entrySection = r.body.split("## Walkthrough")[0]!;
+      expect(entrySection).toContain("src/a.ts:foo:function");
+    }
+  });
+
+  it("neighborhood: an edge to an UNRESOLVED target is not reported as a cross-file neighbor", () => {
+    mkdirSync(snapshotsDir, { recursive: true });
+    const snap = makeSnapshot("c2");
+    // foo (in src/a.ts) imports an unresolved id — must NOT show as Outgoing cross-file.
+    snap.links = [{ source: "src/a.ts:foo:function", target: "external:lodash:module", relation: "imports", confidence: "EXTRACTED" }];
+    writeFileSync(join(snapshotsDir, "c2.json"), JSON.stringify(snap));
+    writeLastBuild(baseDir, { ts: Date.now(), commit_sha: "c2", snapshot_sha256: "w".repeat(64), node_count: snap.nodes.length, edge_count: 1 }, wt);
+    const r = handleGraphVfs("neighborhood/src/a.ts", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.body).not.toContain("external:lodash:module");
+      expect(r.body).toContain("Outgoing: (none)");
     }
   });
 });
