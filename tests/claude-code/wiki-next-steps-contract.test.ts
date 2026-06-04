@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { WIKI_PROMPT_TEMPLATE as CLAUDE_TEMPLATE } from "../../src/hooks/spawn-wiki-worker.js";
 import { WIKI_PROMPT_TEMPLATE as CODEX_TEMPLATE } from "../../src/hooks/codex/spawn-wiki-worker.js";
@@ -11,18 +13,29 @@ import { WIKI_PROMPT_TEMPLATE as HERMES_TEMPLATE } from "../../src/hooks/hermes/
  * left off" pointer, so over-generous wording here is exactly what produces
  * false-positive next steps in the SessionStart brief.
  *
- * The prompt lives in FOUR hand-maintained copies (claude / codex / cursor /
- * hermes). The intros differ slightly per agent, but the `## Next Steps`
- * block must stay byte-identical across all four — a copy drifting back to
- * looser wording would silently reopen the false-positive path for that one
- * agent. These tests guard both the contract and the cross-copy sync.
+ * The prompt lives in FIVE hand-maintained copies (claude / codex / cursor /
+ * hermes, plus the pi extension which ships as raw TypeScript and is read at
+ * the source level here). The intros differ slightly per agent, but the
+ * `## Next Steps` block must stay byte-identical across all five — a copy
+ * drifting back to looser wording (or, as pi originally did, omitting the
+ * section entirely) silently reopens the false-positive path for that agent.
+ * These tests guard both the contract and the cross-copy sync.
  */
+
+// pi ships its prompt inline in a raw-TS extension that can't be imported and
+// executed here, so lift the template literal from source — same approach as
+// tests/pi/pi-extension-source.test.ts.
+const PI_TEMPLATE = readFileSync(
+  join(process.cwd(), "pi", "extension-source", "hivemind.ts"),
+  "utf-8",
+);
 
 const TEMPLATES = {
   claude: CLAUDE_TEMPLATE,
   codex: CODEX_TEMPLATE,
   cursor: CURSOR_TEMPLATE,
   hermes: HERMES_TEMPLATE,
+  pi: PI_TEMPLATE,
 } as const;
 
 /** Extract the body of the `## Next Steps` section (up to the next blank-line
