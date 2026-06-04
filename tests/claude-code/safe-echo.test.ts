@@ -28,6 +28,9 @@ describe("safeEchoCommand — body emitted verbatim, no shell interpretation", (
     ["backslashes", "path\\to\\thing and a \\n that is two chars"],
     ["multi-line", "# Title\n\nline 2\n  indented\nlast"],
     ["mixed nasties", "`cmd` $x \"q\" 'a' 100% \\z\nsecond line"],
+    ["empty string", ""],
+    ["trailing newline", "ends with a newline\n"],
+    ["leading dash (not a printf flag)", "-n is just text, --help too"],
   ];
 
   for (const shell of ["/bin/bash", "/bin/sh"]) {
@@ -48,4 +51,22 @@ describe("safeEchoCommand — body emitted verbatim, no shell interpretation", (
     expect(stdout).toContain("`find/`");
     expect(stderr).not.toMatch(/No such file or directory/);
   });
+
+  // Security: a body crafted to break out of the single quotes and inject a
+  // command must NOT execute. If the `'\''` escaping ever regresses, the
+  // injected `touch` would create the canary file and this test fails.
+  for (const shell of ["/bin/bash", "/bin/sh"]) {
+    it(`does not execute an injected command via quote breakout (${shell})`, () => {
+      const canary = `/tmp/safe-echo-canary-${shell.replace(/\W/g, "_")}.flag`;
+      // First make sure no stale canary exists.
+      runVia(shell, `rm -f '${canary}'`);
+      const payload = `x'; touch '${canary}'; echo 'pwned`;
+      const { stdout } = runVia(shell, safeEchoCommand(payload));
+      // The payload is emitted verbatim...
+      expect(stdout).toBe(payload + "\n");
+      // ...and the injected `touch` never ran.
+      const { stdout: lsOut, stderr: lsErr } = runVia(shell, `ls '${canary}' 2>&1 || true`);
+      expect(lsOut + lsErr).toMatch(/No such file or directory/);
+    });
+  }
 });
