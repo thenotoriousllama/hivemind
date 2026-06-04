@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { spawnWikiWorker, bundleDirFromImportMeta, findClaudeBin } from "../../src/hooks/spawn-wiki-worker.js";
-import { spawnCodexWikiWorker } from "../../src/hooks/codex/spawn-wiki-worker.js";
-import { spawnCursorWikiWorker } from "../../src/hooks/cursor/spawn-wiki-worker.js";
-import { spawnHermesWikiWorker } from "../../src/hooks/hermes/spawn-wiki-worker.js";
+import {
+  spawnCodexWikiWorker,
+  findCodexBin,
+  bundleDirFromImportMeta as codexBundleDir,
+} from "../../src/hooks/codex/spawn-wiki-worker.js";
+import {
+  spawnCursorWikiWorker,
+  findCursorBin,
+  bundleDirFromImportMeta as cursorBundleDir,
+} from "../../src/hooks/cursor/spawn-wiki-worker.js";
+import {
+  spawnHermesWikiWorker,
+  findHermesBin,
+  bundleDirFromImportMeta as hermesBundleDir,
+} from "../../src/hooks/hermes/spawn-wiki-worker.js";
 import type { Config } from "../../src/config.js";
 
 /**
@@ -39,6 +52,10 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
+    // Delegate to the real execSync by default (the find*Bin "usable string"
+    // tests rely on real `which` behavior); individual tests override per-call
+    // with mock*Once to deterministically hit the resolve/fallback branches.
+    execSync: vi.fn((...args: Parameters<typeof actual.execSync>) => actual.execSync(...args)),
     spawn: vi.fn((cmd: string, args: readonly string[]) => {
       spawnCalls.push({ cmd, args });
       // Match the surface the production code touches: a child object with
@@ -246,12 +263,17 @@ describe("spawnHermesWikiWorker — plugin_version threading", () => {
 });
 
 describe("bundleDirFromImportMeta", () => {
-  it("returns the directory containing the entry module", () => {
-    // Build a file:// URL pointing at a fake bundle file and assert the
-    // result is the parent dir of that file. Mirrors how every hook
-    // bootstrap calls this helper.
-    const fakeUrl = "file:///path/to/some/bundle/capture.js";
-    expect(bundleDirFromImportMeta(fakeUrl)).toBe("/path/to/some/bundle");
+  // Each agent ships its own copy of this helper; assert every copy resolves
+  // the parent dir of the entry module (mirrors how each hook bootstrap calls
+  // it) so no copy drifts or goes uncovered.
+  const fakeUrl = "file:///path/to/some/bundle/capture.js";
+  it.each([
+    ["claude", bundleDirFromImportMeta],
+    ["codex", codexBundleDir],
+    ["cursor", cursorBundleDir],
+    ["hermes", hermesBundleDir],
+  ])("%s: returns the directory containing the entry module", (_agent, fn) => {
+    expect(fn(fakeUrl)).toBe("/path/to/some/bundle");
   });
 });
 
@@ -265,5 +287,109 @@ describe("findClaudeBin", () => {
     const bin = findClaudeBin();
     expect(typeof bin).toBe("string");
     expect(bin.length).toBeGreaterThan(0);
+  });
+});
+
+describe("per-agent bin resolvers", () => {
+  // Each agent has its own find<Agent>Bin that probes `which <cli>` and falls
+  // back to the literal CLI name. Both branches are covered deterministically
+  // by overriding execSync per-call (success → resolved path; throw → literal
+  // fallback), independent of whether the CLI exists in the test environment.
+  const RESOLVERS: Array<[string, () => string, string]> = [
+    ["codex", findCodexBin, "codex"],
+    ["cursor", findCursorBin, "cursor-agent"],
+    ["hermes", findHermesBin, "hermes"],
+  ];
+
+  it.each(RESOLVERS)("find%sBin returns the resolved path when `which` succeeds", (_n, fn) => {
+    vi.mocked(execSync).mockReturnValueOnce("/usr/local/bin/the-cli\n");
+    expect(fn()).toBe("/usr/local/bin/the-cli");
+  });
+
+  it.each(RESOLVERS)("find%sBin falls back to the literal name when `which` fails", (_n, fn, fallback) => {
+    vi.mocked(execSync).mockImplementationOnce(() => { throw new Error("not found"); });
+    expect(fn()).toBe(fallback);
+  });
+
+  // cursor/hermes additionally guard `.trim() || "<literal>"` — a successful
+  // `which` that prints nothing must still resolve to the literal name (codex
+  // has no such `||` and is covered by the two cases above).
+  it.each(RESOLVERS.filter(([n]) => n !== "codex"))(
+    "find%sBin falls back to the literal name when `which` prints empty output",
+    (_n, fn, fallback) => {
+      vi.mocked(execSync).mockReturnValueOnce("  \n");
+      expect(fn()).toBe(fallback);
+    },
+  );
+});
+
+describe("per-agent plugin_version fallback to '' (orphan bundle)", () => {
+  // Mirrors the claude-code orphan-bundle test for the forked copies: an
+  // unresolvable manifest must thread "" so the DB column gets DEFAULT ''.
+  // Covers the right-hand side of `getInstalledVersion(...) ?? ""`.
+  it("cursor threads '' when the bundle has no resolvable manifest", () => {
+    const bundleDir = join(scratchRoot, "orphan-cursor", "bundle");
+    mkdirSync(bundleDir, { recursive: true });
+    spawnCursorWikiWorker({
+      config: fakeConfig(),
+      sessionId: "s-cur-orphan",
+      cwd: "/work/x",
+      bundleDir,
+      reason: "TestSpawn",
+    });
+    expect(readSpawnedConfig().pluginVersion).toBe("");
+  });
+
+  it("hermes threads '' when the bundle has no resolvable manifest", () => {
+    const bundleDir = join(scratchRoot, "orphan-hermes", "bundle");
+    mkdirSync(bundleDir, { recursive: true });
+    spawnHermesWikiWorker({
+      config: fakeConfig(),
+      sessionId: "s-her-orphan",
+      cwd: "/work/x",
+      bundleDir,
+      reason: "TestSpawn",
+    });
+    expect(readSpawnedConfig().pluginVersion).toBe("");
+  });
+});
+
+describe("agent model/provider env-var overrides (non-default branch)", () => {
+  // The default-branch (env unset → built-in default) is covered by the
+  // spawn tests above; here we set the env vars so the `?? default` short-
+  // circuits to the override side, covering the other branch.
+  afterEach(() => {
+    delete process.env.HIVEMIND_CURSOR_MODEL;
+    delete process.env.HIVEMIND_HERMES_PROVIDER;
+    delete process.env.HIVEMIND_HERMES_MODEL;
+  });
+
+  it("cursor threads HIVEMIND_CURSOR_MODEL into the spawn config", () => {
+    process.env.HIVEMIND_CURSOR_MODEL = "gpt-5-codex";
+    const { bundleDir } = plantBundle(".claude-plugin");
+    spawnCursorWikiWorker({
+      config: fakeConfig(),
+      sessionId: "s-cur-env",
+      cwd: "/work/x",
+      bundleDir,
+      reason: "TestSpawn",
+    });
+    expect(readSpawnedConfig().cursorModel).toBe("gpt-5-codex");
+  });
+
+  it("hermes threads HIVEMIND_HERMES_PROVIDER and HIVEMIND_HERMES_MODEL into the spawn config", () => {
+    process.env.HIVEMIND_HERMES_PROVIDER = "anthropic";
+    process.env.HIVEMIND_HERMES_MODEL = "claude-opus-4-8";
+    const { bundleDir } = plantBundle(".claude-plugin");
+    spawnHermesWikiWorker({
+      config: fakeConfig(),
+      sessionId: "s-her-env",
+      cwd: "/work/x",
+      bundleDir,
+      reason: "TestSpawn",
+    });
+    const cfg = readSpawnedConfig();
+    expect(cfg.hermesProvider).toBe("anthropic");
+    expect(cfg.hermesModel).toBe("claude-opus-4-8");
   });
 });
