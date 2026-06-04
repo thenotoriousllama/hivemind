@@ -1,0 +1,52 @@
+name: CodeQL
+
+# Static security analysis (SAST) for the TypeScript sources. Surfaces
+# command-injection / path-traversal / unsafe-shell patterns — the bug class the
+# pre-tool-use VFS hooks deal in — as alerts in the repo's Security tab and as
+# inline annotations on PRs. Findings do NOT fail the build by default; gate on
+# them later via branch protection if desired.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan (Mondays 06:00 UTC) so new CodeQL queries catch latent
+    # issues even when the code itself hasn't changed.
+    - cron: "0 6 * * 1"
+
+# Least privilege at the top; the analyze job adds only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF results to the Security tab
+      actions: read # required for CodeQL on private repos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+        with:
+          # Read-only job: don't leave GITHUB_TOKEN in .git/config.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4.36.1
+        with:
+          languages: javascript-typescript
+          # `security-extended` adds the broader security query suite on top of
+          # the default — appropriate for a security-sensitive codebase. It only
+          # surfaces more alerts; it does not fail the run.
+          queries: security-extended
+
+      # No build step: CodeQL analyzes JS/TS source directly (no compilation
+      # needed), so we skip the autobuild/manual-build phase entirely.
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4.36.1
+        with:
+          category: "/language:javascript-typescript"
