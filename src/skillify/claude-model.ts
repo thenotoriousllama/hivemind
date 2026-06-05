@@ -25,7 +25,13 @@ export function claudeModel(model: string, opts: { timeoutMs?: number } = {}): M
       "-p", user, "--model", model, "--no-session-persistence",
       "--output-format", "json", "--system-prompt", system, "--disallowed-tools", ...DENY,
     ];
-    const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"] });
+    // HIVEMIND_CAPTURE=false so these judge/proposer calls are NOT captured as
+    // real sessions — otherwise the engine pollutes the very sessions data it
+    // scans (and the synthetic prompts would show up as transcript rows).
+    const child = spawn("claude", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, HIVEMIND_CAPTURE: "false" },
+    });
     let out = "";
     let err = "";
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("claude timed out")); }, timeoutMs);
