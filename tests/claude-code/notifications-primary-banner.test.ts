@@ -38,6 +38,8 @@ import type { Credentials } from "../../src/commands/auth-creds.js";
 
 let TEMP_HOME = "";
 let ORIGINAL_HOME: string | undefined;
+let ORIGINAL_HIVEMIND_TOKEN: string | undefined;
+let ORIGINAL_HIVEMIND_ORG_ID: string | undefined;
 
 const FRESH_CREDS: Credentials = {
   token: "tok",
@@ -69,16 +71,25 @@ beforeEach(() => {
   // loadConfig() (used by the goals lookup) needs a token + org to return a
   // config; supply them via env so fetchOpenGoals is actually consulted.
   // goalsMock defaults to null, so cases that don't set goals are unchanged.
+  // Capture-and-restore (rather than delete) so a real token/org in the
+  // ambient env isn't clobbered for whatever runs after this suite.
+  ORIGINAL_HIVEMIND_TOKEN = process.env.HIVEMIND_TOKEN;
+  ORIGINAL_HIVEMIND_ORG_ID = process.env.HIVEMIND_ORG_ID;
   process.env.HIVEMIND_TOKEN = "tok";
   process.env.HIVEMIND_ORG_ID = "org-1";
 });
 
 afterEach(() => {
   process.env.HOME = ORIGINAL_HOME;
-  delete process.env.HIVEMIND_TOKEN;
-  delete process.env.HIVEMIND_ORG_ID;
+  restoreEnv("HIVEMIND_TOKEN", ORIGINAL_HIVEMIND_TOKEN);
+  restoreEnv("HIVEMIND_ORG_ID", ORIGINAL_HIVEMIND_ORG_ID);
   rmSync(TEMP_HOME, { recursive: true, force: true });
 });
+
+function restoreEnv(key: string, original: string | undefined): void {
+  if (original === undefined) delete process.env[key];
+  else process.env[key] = original;
+}
 
 describe("pickPrimaryBanner — guard conditions", () => {
   it("returns null when sessionId is undefined", async () => {
