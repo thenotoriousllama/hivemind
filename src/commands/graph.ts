@@ -5,8 +5,9 @@
  *
  * Phase 1 ships ONE subcommand:
  *   hivemind graph build [--cwd <path>]
- *     Walk the project for TypeScript source files, run the tree-sitter
- *     extractor on each, write a snapshot to ~/.hivemind/graphs/<repo-key>/.
+ *     Walk the project for supported source files (TypeScript/JavaScript/Python),
+ *     run the tree-sitter extractor on each, write a snapshot to
+ *     ~/.hivemind/graphs/<repo-key>/.
  *
  * Later phases add: daemon, diff, history, search, latest, push, pull, init,
  * uninstall, prune. None of those exist yet.
@@ -47,11 +48,11 @@ import type {
 } from "../graph/types.js";
 import { deriveProjectKey } from "../utils/repo-identity.js";
 
-const USAGE = `hivemind graph — codebase-graph commands (Phase 1 — TypeScript only)
+const USAGE = `hivemind graph — codebase-graph commands (TypeScript / JavaScript / Python)
 
 Usage:
   hivemind graph build [--cwd <path>]
-      Walk the project for TypeScript source files, extract symbols + edges,
+      Walk the project for supported source files (TS/JS/Python), extract symbols + edges,
       and write a snapshot to ~/.hivemind/graphs/<repo-key>/snapshots/<commit-sha>.json.
       Also updates ~/.hivemind/graphs/<repo-key>/latest-commit.txt and the
       per-repo .last-build.json (consumed by the SessionEnd auto-build hook).
