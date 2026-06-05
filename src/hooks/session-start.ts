@@ -14,7 +14,6 @@ import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlStr } from "../utils/sql.js";
 import { projectNameFromCwd } from "../utils/project-name.js";
-import { listActiveOrgSkills, sessionBucket, buildSkillsActiveInsert, buildSkillsActivePath, skillRootsForCwd } from "../skillify/skills-active.js";
 import { readStdin } from "../utils/stdin.js";
 import { log as _log } from "../utils/debug.js";
 import { getInstalledVersion } from "../utils/version-check.js";
@@ -223,11 +222,6 @@ async function main(): Promise<void> {
   // freezes SessionStart. Hard opt-out via HIVEMIND_AUTOPULL_DISABLED=1.
   // All failures swallowed inside autoPullSkills (documented as
   // never-rejecting), so no try/catch needed here.
-  //
-  // Runs BEFORE the skill-attribution snapshot below so that a skill pulled
-  // (or upgraded) during THIS SessionStart is reflected in the recorded
-  // skills_active set — otherwise the row would capture a stale/empty set
-  // while the session can already use the freshly-pulled skill.
   const pullResult = await autoPullSkills();
   log(`autopull: pulled=${pullResult.pulled} skipped=${pullResult.skipped}`);
 
@@ -244,42 +238,6 @@ async function main(): Promise<void> {
           await api.ensureSessionsTable(sessionsTable);
           await createPlaceholder(api, table, input.session_id, input.cwd ?? "", config.userName, config.orgName, config.workspaceId, pluginVersion);
           log("placeholder created");
-
-          // Skill attribution (measurement): record which org-shared skills were in
-          // context this session + a deterministic A/B bucket. This is the label that
-          // makes skill value measurable (sessions with vs without skill X / v1 vs v2).
-          // Org skills are identified via the pull manifest (authoritative), not the
-          // `--` dirname pattern. Snapshot runs after auto-pull (above) so it reflects
-          // freshly-pulled skills. Opt-out: HIVEMIND_SKILL_ATTRIBUTION=0.
-          // Swallowed — must never fail SessionStart.
-          if (process.env.HIVEMIND_SKILL_ATTRIBUTION !== "0") {
-            try {
-              // Scan global + project-scoped (<cwd>/.claude/skills) roots so
-              // skills pulled with `--to project` are attributed too.
-              const skills = listActiveOrgSkills(skillRootsForCwd(input.cwd));
-              // Distinct `/skills_active/` namespace (NOT `/sessions/`) so the summary /
-              // raw-transcript readers never mistake this attribution row for a transcript.
-              const attrSessionPath = buildSkillsActivePath(config, input.session_id);
-              const attrFilename = attrSessionPath.slice(attrSessionPath.lastIndexOf("/") + 1);
-              const sql = buildSkillsActiveInsert({
-                sessionsTable,
-                sessionPath: attrSessionPath,
-                filename: attrFilename,
-                userName: config.userName,
-                projectName: projectNameFromCwd(input.cwd),
-                pluginVersion,
-                sessionId: input.session_id,
-                cwd: input.cwd,
-                skills,
-                bucket: sessionBucket(input.session_id),
-                ts: new Date().toISOString(),
-              });
-              await api.query(sql);
-              log(`skills_active recorded: ${skills.length} org skills, bucket ${sessionBucket(input.session_id)}`);
-            } catch (e: any) {
-              log(`skills_active attribution failed (swallowed): ${e?.message ?? e}`);
-            }
-          }
         } else {
           const reason = process.env.HIVEMIND_CAPTURE === "false"
             ? "HIVEMIND_CAPTURE=false"
