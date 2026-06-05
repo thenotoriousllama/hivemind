@@ -20,12 +20,14 @@ export function claudeModel(model: string, opts: { timeoutMs?: number } = {}): M
       // transcript text in the judge/proposer prompt can never trigger tool use.
       "--tools", "",
     ];
-    // HIVEMIND_CAPTURE=false so these judge/proposer calls are NOT captured as
-    // real sessions — otherwise the engine pollutes the very sessions data it
-    // scans (and the synthetic prompts would show up as transcript rows).
+    // HIVEMIND_CAPTURE=false so these calls aren't captured as real sessions, AND
+    // HIVEMIND_WIKI_WORKER=1 so the spawned claude -p skips this package's SessionStart
+    // hook entirely (no Deeplake-context injection into the prompt, no auto-pull/graph
+    // work) — one child per anchored invocation would otherwise contaminate the judge
+    // prompt and pile up background work. Same guard the other internal runners use.
     const child = spawn("claude", args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, HIVEMIND_CAPTURE: "false" },
+      env: { ...process.env, HIVEMIND_CAPTURE: "false", HIVEMIND_WIKI_WORKER: "1" },
     });
     let out = "";
     let err = "";
