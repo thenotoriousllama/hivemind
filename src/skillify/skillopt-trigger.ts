@@ -16,13 +16,17 @@ import { fileURLToPath } from "node:url";
 import { log as _log } from "../utils/debug.js";
 import { getStateDir } from "./state-dir.js";
 import { tryAcquireWorkerLock, releaseWorkerLock } from "./state.js";
-import { loadCredentials } from "../commands/auth.js";
+import { loadConfig } from "../config.js";
 
 const log = (m: string) => _log("skillopt-trigger", m);
 
-/** The worker needs creds to query Deeplake; default fire-gate skips when logged out. */
+/**
+ * Fire-gate: the worker queries Deeplake via loadConfig(), which accepts both the
+ * credentials file AND env creds (HIVEMIND_TOKEN/HIVEMIND_ORG_ID). Use the SAME check
+ * here so we neither skip env-cred users forever nor stamp on a malformed token-only file.
+ */
 function defaultHasCreds(): boolean {
-  try { return Boolean(loadCredentials()?.token); } catch { return false; }
+  try { return Boolean(loadConfig()?.token); } catch { return false; }
 }
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;

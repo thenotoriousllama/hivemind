@@ -20,6 +20,10 @@ export function claudeModel(model: string, opts: { timeoutMs?: number } = {}): M
       // any MCP/configured tools (a deny-list can't enumerate those), so prompt-injected
       // transcript text in the judge/proposer prompt can never trigger tool use.
       "--tools", "",
+      // --strict-mcp-config ignores the user's MCP config entirely (--tools only denies
+      // USE, not LOADING) — a broken/oversized user MCP schema would otherwise fail every
+      // judge/proposer call before it returns JSON, silently stopping proposals.
+      "--strict-mcp-config",
     ];
     // HIVEMIND_CAPTURE=false so these calls aren't captured as real sessions, AND
     // HIVEMIND_WIKI_WORKER=1 so the spawned claude -p skips this package's SessionStart
