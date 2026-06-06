@@ -27,16 +27,22 @@ function likeEscape(s: string): string {
   return s.replace(/([\\%_])/g, "\\$1");
 }
 
-/** The LATEST invocation of `name--author` in a session (so the window targets the
- *  invocation the user is reacting to), or null if it isn't in the session. */
-export async function findLatestInvocation(
-  query: QueryFn, sessionsTable: string, sessionId: string, name: string, author: string,
+/**
+ * Find the invocation of `name--author` to judge. When `toolUseId` is given (the exact
+ * call that opened the pending window, captured at PreToolUse), match THAT invocation —
+ * so a quick re-invocation of the same skill before the worker queries can't make us
+ * judge the wrong window. Falls back to the latest matching invocation (e.g. the pinned
+ * one isn't captured yet). null if the skill isn't in the session at all.
+ */
+export async function findInvocation(
+  query: QueryFn, sessionsTable: string, sessionId: string, name: string, author: string, toolUseId?: string,
 ): Promise<SkillInvocation | null> {
   const sid = sqlStr(likeEscape(sessionId));
   const rows = await query(
     `SELECT message FROM "${sqlIdent(sessionsTable)}" WHERE path LIKE '/sessions/%${sid}%' ESCAPE '\\' ORDER BY creation_date ASC`,
   );
-  let found: SkillInvocation | null = null;
+  let latest: SkillInvocation | null = null;
+  let pinned: SkillInvocation | null = null;
   for (const r of rows) {
     const m = parseMessage(r.message);
     if (!m) continue;
@@ -45,9 +51,11 @@ export async function findLatestInvocation(
     if (!ref) continue;
     const p = splitOrgSkill(ref);
     if (!p || p.name !== name || p.author !== author) continue;
-    found = { sessionId, name, author, ts: typeof m.timestamp === "string" ? m.timestamp : "" }; // keep last → latest
+    const inv: SkillInvocation = { sessionId, name, author, ts: typeof m.timestamp === "string" ? m.timestamp : "" };
+    latest = inv; // keep last → latest
+    if (toolUseId && m.tool_use_id === toolUseId) pinned = inv; // the exact arming invocation
   }
-  return found;
+  return pinned ?? latest;
 }
 
 export interface ImproveResult {
@@ -65,6 +73,7 @@ export interface ImproveOpts {
   workspaceId: string;
   sessionId: string;
   skillRef: string;  // "name--author"
+  toolUseId?: string; // the exact invocation that opened the window (pins the judged window)
   reaction: string;  // the user's just-submitted prompt (the reaction)
   judge: ModelCall;
   proposerModel: ModelCall;
@@ -80,7 +89,7 @@ export async function improveSkillIfFailed(opts: ImproveOpts): Promise<ImproveRe
   const parts = splitOrgSkill(opts.skillRef);
   if (!parts) return none("not an org skill");
 
-  const inv = await findLatestInvocation(opts.query, opts.sessionsTable, opts.sessionId, parts.name, parts.author);
+  const inv = await findInvocation(opts.query, opts.sessionsTable, opts.sessionId, parts.name, parts.author, opts.toolUseId);
   if (!inv) return none("invocation not found in session");
 
   let window = await windowAroundInvocation(opts.query, opts.sessionsTable, inv);

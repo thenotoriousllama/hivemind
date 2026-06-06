@@ -42,6 +42,7 @@ async function main(): Promise<void> {
   const sessionId = process.env.HIVEMIND_SKILLOPT_SESSION ?? "";
   const skillRef = process.env.HIVEMIND_SKILLOPT_SKILL ?? "";
   const reaction = process.env.HIVEMIND_SKILLOPT_REACTION ?? "";
+  const toolUseId = process.env.HIVEMIND_SKILLOPT_TOOL_USE_ID || undefined;
   if (!sessionId || !skillRef) { log("no session/skill in env — nothing to do"); return; }
 
   const config = loadConfig();
@@ -81,6 +82,7 @@ async function main(): Promise<void> {
       workspaceId: config.workspaceId,
       sessionId,
       skillRef,
+      toolUseId,
       reaction,
       judge: agentModel({ agent, role: "judge", bin: agentBin }),
       proposerModel: agentModel({ agent, role: "proposer", bin: agentBin }),

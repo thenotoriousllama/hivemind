@@ -11,9 +11,9 @@ import { armSkillOptOnSkillUse, reactSkillOpt } from "../../src/hooks/shared/ski
 beforeEach(() => { vi.clearAllMocks(); delete process.env.HIVEMIND_SKILLOPT_DISABLED; delete process.env.HIVEMIND_WIKI_WORKER; });
 
 describe("armSkillOptOnSkillUse", () => {
-  it("arms on a Skill tool_use, passing the skill ref", () => {
-    armSkillOptOnSkillUse("s1", "Skill", { skill: "posthog--kamo" });
-    expect(markSkillPending).toHaveBeenCalledWith("s1", "posthog--kamo");
+  it("arms on a Skill tool_use, passing the skill ref + tool_use_id", () => {
+    armSkillOptOnSkillUse("s1", "Skill", { skill: "posthog--kamo" }, "tu1");
+    expect(markSkillPending).toHaveBeenCalledWith("s1", "posthog--kamo", "tu1");
   });
   it("does nothing for non-Skill tools", () => {
     armSkillOptOnSkillUse("s1", "Bash", { command: "ls" });

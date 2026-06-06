@@ -11,29 +11,37 @@ function memStore(initial: Record<string, PendingSkill> = {}) {
   return { store, get: (sid: string) => m.get(sid) ?? null };
 }
 
-describe("markSkillPending (org-skill gate + K-message window)", () => {
-  it("opens a K-message judgment window for an ORG skill (in its own session entry)", () => {
+describe("markSkillPending (shape gate + manifest gate + K-window + tool_use_id)", () => {
+  const ORG = () => true; // isOrgSkill: in unit tests, treat refs as pulled org skills
+
+  it("opens a K-message window for a PULLED org skill, storing the tool_use_id", () => {
     const s = memStore();
-    expect(markSkillPending("s1", "posthog--kamo", { store: s.store, env: {} as NodeJS.ProcessEnv })).toBe(true);
-    expect(s.get("s1")).toEqual({ skill: "posthog--kamo", budget: DEFAULT_JUDGE_WINDOW });
+    expect(markSkillPending("s1", "posthog--kamo", "tu1", { store: s.store, env: {} as NodeJS.ProcessEnv, isOrgSkill: ORG })).toBe(true);
+    expect(s.get("s1")).toEqual({ skill: "posthog--kamo", budget: DEFAULT_JUDGE_WINDOW, toolUseId: "tu1" });
   });
 
-  it("ignores bare local and plugin skills (org skills only)", () => {
+  it("ignores bare local and plugin skills (wrong shape → not org)", () => {
     const s = memStore();
-    expect(markSkillPending("s1", "bareskill", { store: s.store })).toBe(false);
-    expect(markSkillPending("s1", "hivemind:memory", { store: s.store })).toBe(false);
+    expect(markSkillPending("s1", "bareskill", "tu", { store: s.store, isOrgSkill: ORG })).toBe(false);
+    expect(markSkillPending("s1", "hivemind:memory", "tu", { store: s.store, isOrgSkill: ORG })).toBe(false);
     expect(s.get("s1")).toBeNull();
+  });
+
+  it("ignores a LOCAL skill that looks like name--author but isn't in the pull manifest", () => {
+    const s = memStore();
+    expect(markSkillPending("s1", "myskill--alice", "tu", { store: s.store, isOrgSkill: () => false })).toBe(false);
+    expect(s.get("s1")).toBeNull(); // must not arm → can't edit the shared org row of that name
   });
 
   it("the newest org-skill call supersedes the pending one and resets the budget", () => {
     const s = memStore({ s1: { skill: "a--u", budget: 1 } });
-    markSkillPending("s1", "b--u", { store: s.store, env: {} as NodeJS.ProcessEnv });
-    expect(s.get("s1")).toEqual({ skill: "b--u", budget: DEFAULT_JUDGE_WINDOW });
+    markSkillPending("s1", "b--u", "tu2", { store: s.store, env: {} as NodeJS.ProcessEnv, isOrgSkill: ORG });
+    expect(s.get("s1")).toEqual({ skill: "b--u", budget: DEFAULT_JUDGE_WINDOW, toolUseId: "tu2" });
   });
 
   it("does not touch a DIFFERENT session's entry (no cross-session clobber)", () => {
     const s = memStore({ other: { skill: "x--u", budget: 2 } });
-    markSkillPending("s1", "b--u", { store: s.store, env: {} as NodeJS.ProcessEnv });
+    markSkillPending("s1", "b--u", "tu", { store: s.store, env: {} as NodeJS.ProcessEnv, isOrgSkill: ORG });
     expect(s.get("other")).toEqual({ skill: "x--u", budget: 2 }); // untouched
     expect(s.get("s1")).toMatchObject({ skill: "b--u" });
   });
@@ -61,11 +69,11 @@ describe("runEventTrigger", () => {
     return { run, spawnWorker, get: s.get };
   }
 
-  it("spawns the worker with session+skill+reaction+agent, decrements the budget", () => {
-    const { run, spawnWorker, get } = harness();
+  it("spawns the worker with session+skill+reaction+toolUseId+agent, decrements the budget", () => {
+    const { run, spawnWorker, get } = harness({ initial: { s1: { skill: "posthog--kamo", budget: 3, toolUseId: "tu9" } } });
     const r = run("s1", "no you fucked up, mocking hides the bug", { agent: "codex" });
     expect(r).toEqual({ fired: true, reason: "spawned" });
-    expect(spawnWorker).toHaveBeenCalledWith("s1", "posthog--kamo", "no you fucked up, mocking hides the bug", "codex");
+    expect(spawnWorker).toHaveBeenCalledWith("s1", "posthog--kamo", "no you fucked up, mocking hides the bug", "tu9", "codex");
     expect(get("s1")?.budget).toBe(2); // 3 → 2
   });
 

@@ -258,7 +258,7 @@ export async function processPreToolUse(input: PreToolUseInput, deps: ClaudePreT
   } = deps;
 
   // SkillOpt: arm this session if it invoked an ORG skill (swallowed; never blocks tools).
-  armSkillOptOnSkillUse(input.session_id, input.tool_name, input.tool_input);
+  armSkillOptOnSkillUse(input.session_id, input.tool_name, input.tool_input, input.tool_use_id);
 
   const cmd = (input.tool_input.command as string) ?? "";
   const shellCmd = getShellCommand(input.tool_name, input.tool_input);

@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { log as _log } from "../utils/debug.js";
 import { getStateDir } from "./state-dir.js";
 import { splitOrgSkill } from "./skill-invocations.js";
+import { loadManifest } from "./manifest.js";
 import { loadConfig } from "../config.js";
 
 const log = (m: string) => _log("skillopt-trigger", m);
@@ -43,7 +44,14 @@ export function judgeWindow(env: NodeJS.ProcessEnv = process.env): number {
 /** Reaction text passed to the worker via env — bounded so a pasted log can't bloat argv. */
 const MAX_REACTION = 8000;
 
-export interface PendingSkill { skill: string; budget: number }
+export interface PendingSkill { skill: string; budget: number; toolUseId?: string }
+
+/** Authoritative org-skill check: is this ref actually a PULLED org skill (in the manifest),
+ *  not just a LOCAL skill that happens to be named `name--author`? Without this, a local skill
+ *  could shadow an org-table row of the same name and get the shared org skill edited. */
+function defaultIsOrgSkill(skillRef: string): boolean {
+  try { return loadManifest().entries.some((e) => e.dirName === skillRef); } catch { return false; }
+}
 
 /**
  * Pending state is stored PER SESSION (one small file each), not a single shared map.
@@ -80,6 +88,7 @@ const fileStore: PendingStore = {
 export interface MarkDeps {
   store?: PendingStore;
   env?: NodeJS.ProcessEnv;
+  isOrgSkill?: (skillRef: string) => boolean; // default: present in the pull manifest
 }
 
 /**
@@ -89,17 +98,18 @@ export interface MarkDeps {
  * pending one for that session (the next reaction is to the most recent skill). Returns
  * true if a window is now open.
  */
-export function markSkillPending(sessionId: string, skillRef: string, deps: MarkDeps = {}): boolean {
+export function markSkillPending(sessionId: string, skillRef: string, toolUseId?: string, deps: MarkDeps = {}): boolean {
   if (!sessionId || !skillRef) return false;
-  if (!splitOrgSkill(skillRef)) return false; // not an org skill → not our concern
-  (deps.store ?? fileStore).save(sessionId, { skill: skillRef, budget: judgeWindow(deps.env ?? process.env) });
+  if (!splitOrgSkill(skillRef)) return false; // wrong shape → not an org skill
+  if (!(deps.isOrgSkill ?? defaultIsOrgSkill)(skillRef)) return false; // not a PULLED org skill → don't arm
+  (deps.store ?? fileStore).save(sessionId, { skill: skillRef, budget: judgeWindow(deps.env ?? process.env), toolUseId });
   return true;
 }
 
 export interface TriggerDeps {
   env?: NodeJS.ProcessEnv;
   store?: PendingStore;
-  spawnWorker?: (sessionId: string, skill: string, reaction: string, agent?: string) => void;
+  spawnWorker?: (sessionId: string, skill: string, reaction: string, toolUseId: string | undefined, agent?: string) => void;
   canFire?: () => boolean;
 }
 
@@ -132,12 +142,12 @@ export function runEventTrigger(
   // this session's file is touched, so a concurrent session can't be clobbered.
   store.save(sessionId, p.budget - 1 <= 0 ? null : { ...p, budget: p.budget - 1 });
 
-  (deps.spawnWorker ?? spawnWorker)(sessionId, p.skill, reaction ?? "", opts.agent);
+  (deps.spawnWorker ?? spawnWorker)(sessionId, p.skill, reaction ?? "", p.toolUseId, opts.agent);
   return { fired: true, reason: "spawned" };
 }
 
 /** Spawn the detached targeted worker (judge skill X against the reaction). Swallowed. */
-function spawnWorker(sessionId: string, skill: string, reaction: string, agent?: string): void {
+function spawnWorker(sessionId: string, skill: string, reaction: string, toolUseId?: string, agent?: string): void {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const entry = path.join(here, "skillopt-worker.js"); // bundled alongside this module
@@ -150,6 +160,7 @@ function spawnWorker(sessionId: string, skill: string, reaction: string, agent?:
         HIVEMIND_SKILLOPT_SESSION: sessionId,
         HIVEMIND_SKILLOPT_SKILL: skill,
         HIVEMIND_SKILLOPT_REACTION: (reaction ?? "").slice(0, MAX_REACTION),
+        ...(toolUseId ? { HIVEMIND_SKILLOPT_TOOL_USE_ID: toolUseId } : {}),
         ...(agent ? { HIVEMIND_SKILLOPT_AGENT: agent } : {}),
       },
     });

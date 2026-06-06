@@ -10,11 +10,11 @@ import { markSkillPending, runEventTrigger } from "../../skillify/skillopt-trigg
  * PreToolUse: if the agent invoked a `Skill` tool on an ORG skill (`name--author`),
  * open its K-message judgment window. Non-org skills (bare / plugin) are ignored.
  */
-export function armSkillOptOnSkillUse(sessionId: string, toolName: string, toolInput: unknown): void {
+export function armSkillOptOnSkillUse(sessionId: string, toolName: string, toolInput: unknown, toolUseId?: string): void {
   try {
     if (toolName !== "Skill" || process.env.HIVEMIND_SKILLOPT_DISABLED === "1") return;
     const ref = (toolInput as { skill?: unknown })?.skill;
-    if (typeof ref === "string") markSkillPending(sessionId, ref);
+    if (typeof ref === "string") markSkillPending(sessionId, ref, toolUseId);
   } catch { /* never break PreToolUse */ }
 }
 

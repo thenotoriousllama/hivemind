@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { improveSkillIfFailed, findLatestInvocation } from "../../src/skillify/skillopt-improve.js";
+import { improveSkillIfFailed, findInvocation } from "../../src/skillify/skillopt-improve.js";
 import type { QueryFn } from "../../src/skillify/skill-invocations.js";
 
 /** Session rows: a Skill invocation + surrounding turns. */
@@ -37,15 +37,25 @@ const base = (query: QueryFn, over: Partial<Parameters<typeof improveSkillIfFail
   ...over,
 });
 
-describe("findLatestInvocation", () => {
+describe("findInvocation", () => {
   it("locates the latest invocation of the skill in the session", async () => {
     const { query } = makeQuery();
-    const inv = await findLatestInvocation(query, "sessions", "s1", "posthog", "kamo");
+    const inv = await findInvocation(query, "sessions", "s1", "posthog", "kamo");
     expect(inv).toMatchObject({ sessionId: "s1", name: "posthog", author: "kamo", ts: "t1" });
   });
   it("returns null when the skill wasn't invoked in the session", async () => {
     const { query } = makeQuery();
-    expect(await findLatestInvocation(query, "sessions", "s1", "other", "x")).toBeNull();
+    expect(await findInvocation(query, "sessions", "s1", "other", "x")).toBeNull();
+  });
+
+  it("pins the invocation by tool_use_id (not the latest retry) when given one", async () => {
+    const two = vi.fn(async () => [
+      { message: { type: "tool_call", tool_name: "Skill", tool_input: JSON.stringify({ skill: "x--a" }), session_id: "s", timestamp: "t1", tool_use_id: "tu1" } },
+      { message: { type: "tool_call", tool_name: "Skill", tool_input: JSON.stringify({ skill: "x--a" }), session_id: "s", timestamp: "t2", tool_use_id: "tu2" } },
+    ] as Array<Record<string, unknown>>);
+    expect((await findInvocation(two, "sessions", "s", "x", "a", "tu1"))?.ts).toBe("t1"); // pinned, not latest
+    expect((await findInvocation(two, "sessions", "s", "x", "a", "nope"))?.ts).toBe("t2"); // unknown id → latest fallback
+    expect((await findInvocation(two, "sessions", "s", "x", "a"))?.ts).toBe("t2"); // no pin → latest
   });
 });
 

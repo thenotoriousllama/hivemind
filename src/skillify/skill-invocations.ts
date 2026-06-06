@@ -29,6 +29,7 @@ export interface ParsedMsg {
   type?: string;
   tool_name?: string;
   tool_input?: unknown;
+  tool_use_id?: unknown;
   content?: unknown;
   session_id?: unknown;
   timestamp?: unknown;
