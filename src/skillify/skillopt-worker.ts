@@ -16,6 +16,7 @@ import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { getStateDir } from "./state-dir.js";
 import { runSkillOptCycle } from "./skillopt-engine.js";
+import { agentModel, detectScorerAgent } from "./agent-model.js";
 import { readCurrentSkillRow, publishImprovedSkill } from "./skill-org-publish.js";
 import { loadMeta, appendMeta, priorEditSummaries, alreadyProposed, metaEntryFor } from "./skillopt-meta.js";
 
@@ -33,6 +34,11 @@ async function main(): Promise<void> {
   // isn't installed on THIS machine; reading the table lets us improve it anyway
   // (and gives us the current version to bump on publish).
   const now = new Date().toISOString();
+  // Score on the USER's own agent (cost lands on them), not hardcoded claude — a
+  // codex/hermes/cursor/pi user with no local `claude` still gets SkillOpt. The
+  // judge/proposer run no-tools (untrusted transcript text in the prompt).
+  const agent = detectScorerAgent();
+  log(`scoring on agent: ${agent}`);
   const metaFile = path.join(getStateDir(), "skillopt", "meta.jsonl");
   const metaCache = loadMeta(metaFile);
   // Lookback + thresholds are env-tunable (defaults: 30-day window, the detector's
@@ -65,7 +71,9 @@ async function main(): Promise<void> {
       sinceIso, limit: 5000,
       minInvocations: envNum("HIVEMIND_SKILLOPT_MIN_INVOCATIONS"),
       failureRateThreshold: envNum("HIVEMIND_SKILLOPT_FAILURE_RATE"),
+      judge: agentModel({ agent, role: "judge" }),
     },
+    proposer: { model: agentModel({ agent, role: "proposer" }) },
     fireThreshold: envNum("HIVEMIND_SKILLOPT_FIRE_THRESHOLD"),
     now,
   });
