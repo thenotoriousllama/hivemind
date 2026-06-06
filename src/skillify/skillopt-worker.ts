@@ -10,15 +10,13 @@
  * agent (claude -p) — no org key, cost lands on the user — in the background, weekly.
  * HIVEMIND_SKILLOPT_WORKER=1 is set by the trigger as a recursion guard.
  */
-import os from "node:os";
 import path from "node:path";
 import { log as _log } from "../utils/debug.js";
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { getStateDir } from "./state-dir.js";
-import { runSkillOptCycle, writeProposalToDisk, readSkillBodyViaManifest } from "./skillopt-engine.js";
+import { runSkillOptCycle, writeProposalToDisk, readSkillBodyFromOrgTable } from "./skillopt-engine.js";
 import { loadMeta, appendMeta, priorEditSummaries, alreadyProposed, metaEntryFor } from "./skillopt-meta.js";
-import { loadManifest } from "./manifest.js";
 
 const log = (m: string) => _log("skillopt-worker", m);
 
@@ -29,11 +27,10 @@ async function main(): Promise<void> {
 
   const api = new DeeplakeApi(config.token, config.apiUrl, config.orgId, config.workspaceId, config.tableName);
   const query = (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>;
-  // Resolve skill bodies via the pull manifest's recorded installRoot (authoritative)
-  // — invocations come from ALL projects, so we can't assume the worker's own cwd.
-  // The global ~/.claude/skills is a fallback for skills not in the manifest.
-  const manifest = loadManifest();
-  const skillsRoot = path.join(os.homedir(), ".claude", "skills");
+  // Skill bodies come from the Deeplake `skills` table — the ORG-WIDE source of
+  // truth — not local disk. Detection is org-wide, so a deficient skill often
+  // isn't installed on THIS machine; reading the table lets us improve it anyway
+  // (and gives us the current version to bump on publish).
   const proposalsRoot = path.join(getStateDir(), "skillopt", "proposals");
   const metaFile = path.join(getStateDir(), "skillopt", "meta.jsonl");
   const metaCache = loadMeta(metaFile);
@@ -47,7 +44,7 @@ async function main(): Promise<void> {
   const res = await runSkillOptCycle({
     query,
     sessionsTable: config.sessionsTableName,
-    readSkillBody: (name, author) => readSkillBodyViaManifest(name, author, manifest, skillsRoot),
+    readSkillBody: (name, author) => readSkillBodyFromOrgTable(query, config.skillsTableName, name, author),
     writeProposal: (rec) => writeProposalToDisk(proposalsRoot, rec),
     meta: {
       prior: (n, a) => priorEditSummaries(metaCache, n, a),

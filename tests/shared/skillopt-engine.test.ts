@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runSkillOptCycle, readSkillBodyViaManifest, type ProposalRecord } from "../../src/skillify/skillopt-engine.js";
+import { runSkillOptCycle, readSkillBodyViaManifest, readSkillBodyFromOrgTable, type ProposalRecord } from "../../src/skillify/skillopt-engine.js";
 import type { PulledManifest } from "../../src/skillify/manifest.js";
 
 const invRow = (skill: string, sid: string) => ({
@@ -43,7 +43,7 @@ describe("runSkillOptCycle", () => {
     const written: ProposalRecord[] = [];
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "2026-06-05T00:00:00Z",
-      readSkillBody: () => "## Rules\n1. mock the client",
+      readSkillBody: async () => ({ body: "## Rules\n1. mock the client", version: 3 }),
       writeProposal: (r) => written.push(r),
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
@@ -51,14 +51,14 @@ describe("runSkillOptCycle", () => {
     expect(res.deficientCount).toBe(6);
     expect(written).toHaveLength(6);
     expect(written[0].candidateBody).toContain("Always verify via the PostHog API.");
-    expect(written[0]).toMatchObject({ invocations: 10, confirmedFailures: 5 });
+    expect(written[0]).toMatchObject({ invocations: 10, confirmedFailures: 5, baseVersion: 3 });
   });
 
   it("does NOT fire below the threshold (no proposals, even though detection ran)", async () => {
     const writeProposal = vi.fn();
     const res = await runSkillOptCycle({
       query: world(4), sessionsTable: "sessions", now: "t",
-      readSkillBody: () => "## Rules", writeProposal,
+      readSkillBody: async () => ({ body: "## Rules", version: 1 }), writeProposal,
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res).toMatchObject({ fired: false, deficientCount: 4 });
@@ -66,11 +66,11 @@ describe("runSkillOptCycle", () => {
     expect(writeProposal).not.toHaveBeenCalled();
   });
 
-  it("skips a deficient skill that isn't installed locally (no body to edit)", async () => {
+  it("skips a deficient skill absent from the org skills table (no body to edit)", async () => {
     const written: ProposalRecord[] = [];
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "t",
-      readSkillBody: (name) => (name === "bad0" ? null : "## Rules\n1. mock the client"),
+      readSkillBody: async (name) => (name === "bad0" ? null : { body: "## Rules\n1. mock the client", version: 1 }),
       writeProposal: (r) => written.push(r),
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
@@ -84,7 +84,7 @@ describe("runSkillOptCycle", () => {
     const recorded: string[] = [];
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "t",
-      readSkillBody: () => "## Rules\n1. mock the client",
+      readSkillBody: async () => ({ body: "## Rules\n1. mock the client", version: 1 }),
       writeProposal: (r) => written.push(r),
       detector: { judge: judge() }, proposer: { model: proposerModel() },
       meta: {
@@ -117,10 +117,29 @@ describe("runSkillOptCycle", () => {
     }
   });
 
+  it("readSkillBodyFromOrgTable reads the latest version's body straight from the skills table", async () => {
+    const query = vi.fn(async (sql: string) => {
+      // org-wide source of truth: queries the skills table by (name, author), latest version
+      expect(sql).toContain('FROM "skills"');
+      expect(sql).toContain("name = 'posthog'");
+      expect(sql).toContain("author = 'kamo'");
+      expect(sql).toContain("ORDER BY version DESC");
+      return [{ body: "## Rules\n1. use the real client", version: 4 }];
+    });
+    expect(await readSkillBodyFromOrgTable(query, "skills", "posthog", "kamo"))
+      .toEqual({ body: "## Rules\n1. use the real client", version: 4 });
+  });
+
+  it("readSkillBodyFromOrgTable returns null when the skill isn't in the table (works even if not installed locally)", async () => {
+    expect(await readSkillBodyFromOrgTable(async () => [], "skills", "ghost", "nobody")).toBeNull();
+    // present row but empty body → null (don't propose against nothing)
+    expect(await readSkillBodyFromOrgTable(async () => [{ body: "   ", version: 2 }], "skills", "x", "y")).toBeNull();
+  });
+
   it("honors a custom fireThreshold", async () => {
     const res = await runSkillOptCycle({
       query: world(3), sessionsTable: "sessions", now: "t", fireThreshold: 3,
-      readSkillBody: () => "## Rules", writeProposal: vi.fn(),
+      readSkillBody: async () => ({ body: "## Rules", version: 1 }), writeProposal: vi.fn(),
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res.fired).toBe(true);
