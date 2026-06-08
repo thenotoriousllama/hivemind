@@ -132,10 +132,11 @@ describe("improveSkillIfFailed", () => {
     expect(inserts).toHaveLength(0);
   });
 
-  // Bug #1: the invocation row is written by a SEPARATE process (capture.js) and lands in
-  // Deeplake on a short insert→read visibility lag, so a worker that fires on a fast reaction
-  // reads stale and finds nothing. The window-retry (K=3) only helps if the user keeps typing;
-  // a single fast/final reaction would silently no-op. The worker must retry-with-backoff.
+  // Deeplake insert→read visibility lag (expected latency, not a defect): the invocation row is
+  // written by a SEPARATE process (capture.js) and lands on a short visibility lag, so a worker
+  // that fires on a fast reaction reads stale and finds nothing. The window-retry (K=3) only helps
+  // if the user keeps typing; a single fast/final reaction would silently no-op. So the worker
+  // must retry-with-backoff itself.
   it("retries findInvocation when the row hasn't propagated yet (Deeplake lag) → then judges + improves", async () => {
     let sessionsCalls = 0;
     const inserts: string[] = [];

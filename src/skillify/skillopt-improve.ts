@@ -82,9 +82,10 @@ export interface ImproveOpts {
   prior?: (name: string, author: string) => string[];
   alreadyProposed?: (name: string, author: string, edits: Edit[]) => boolean;
   recordEdit?: (name: string, author: string, edits: Edit[]) => void;
-  // Bug #1 tolerance: the invocation row is written by a SEPARATE process (capture.js) and lands
-  // in Deeplake on a short insert→read visibility lag, so a worker firing on a fast reaction can
-  // read stale. Poll findInvocation with linear backoff before giving up. Injectable for tests.
+  // Deeplake insert→read lag tolerance: the invocation row is written by a SEPARATE process
+  // (capture.js) and lands in Deeplake on a short visibility lag (expected, not a defect), so a
+  // worker firing on a fast reaction can read stale. Poll findInvocation with linear backoff
+  // before giving up. Injectable for tests.
   invocationRetries?: number;            // extra attempts after the first (default 5)
   invocationBackoffMs?: number;          // linear backoff base ms: sleep = base * attempt (default 3000)
   sleep?: (ms: number) => Promise<void>; // default real timer
@@ -95,8 +96,8 @@ const DEFAULT_INVOCATION_BACKOFF_MS = 3000;
 const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * findInvocation, tolerant of Deeplake's insert→read visibility lag (Bug #1). The window's
- * skill-invocation row is captured by a SEPARATE process and may not be queryable the instant the
+ * findInvocation, tolerant of Deeplake's insert→read visibility lag (expected latency, not a
+ * defect). The window's skill-invocation row is captured by a SEPARATE process and may not be queryable the instant the
  * worker fires on a fast reaction. The row is near-certain to land (capture is a reliable path), so
  * poll with linear backoff; but it's NOT guaranteed (capture may be disabled/errored), so the
  * attempts are BOUNDED — on exhaustion we return null and the caller gives up gracefully (no
