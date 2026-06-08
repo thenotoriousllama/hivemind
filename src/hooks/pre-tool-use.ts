@@ -570,14 +570,18 @@ export async function processPreToolUse(input: PreToolUseInput, deps: ClaudePreT
     logFn(`direct query failed: ${e.message}`);
   }
 
-  // No compiled handler matched (or a direct query failed). Do NOT return null
-  // here: null hands the ORIGINAL command back to Claude Code's host shell, and
-  // the command only passed isSafe() — it isn't guaranteed to be confined to
-  // the (non-existent) virtual paths. `sort /etc/passwd ~/.deeplake/memory/x >
-  // /tmp/out` would still read/write real files. Replace it with the retry
-  // guidance so nothing reaches the host shell.
-  logFn(`unroutable memory command, returning guidance: ${shellCmd}`);
-  return buildRetryGuidanceDecision(input.tool_name);
+  // No compiled handler matched (or a direct query failed). Route through the
+  // VFS shell bundle — it is a sandboxed Node.js interpreter that operates
+  // entirely against the SQL backend, so no host filesystem access occurs.
+  // Do NOT return null: that would hand the original command to Claude Code's
+  // real host shell, which is unsafe.
+  const shellBundle = join(__bundleDir, "shell", "deeplake-shell.js");
+  const escaped = shellCmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  logFn(`unroutable memory command, falling back to shell: ${shellCmd}`);
+  return buildAllowDecision(
+    `node "${shellBundle}" -c "${escaped}"`,
+    `[DeepLake shell] ${shellCmd}`,
+  );
 }
 
 /* c8 ignore start */

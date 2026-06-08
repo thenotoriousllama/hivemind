@@ -141,6 +141,8 @@ describe("pre-tool-use: commands targeting memory are intercepted", () => {
   //    this harness, even otherwise-serviceable shapes land here. ──
 
   it("rewrites echo redirect to retry guidance when unconfigured", () => {
+    // No token in env → loadConfig() returns null → RETRY at the no-config guard,
+    // before the shell-fallback path is reached.
     const r = runPreToolUse("Bash", { command: "echo 'hello' > ~/.deeplake/memory/test.md" });
     expect(r.empty).toBe(false);
     if (!r.empty) {
@@ -151,6 +153,8 @@ describe("pre-tool-use: commands targeting memory are intercepted", () => {
   });
 
   it("rewrites jq pipeline to retry guidance when unconfigured", () => {
+    // No token in env → loadConfig() returns null → RETRY at the no-config guard,
+    // before the shell-fallback path is reached.
     const r = runPreToolUse("Bash", { command: "cat ~/.deeplake/memory/data.json | jq '.keys | length'" });
     expect(r.empty).toBe(false);
     if (!r.empty) {
