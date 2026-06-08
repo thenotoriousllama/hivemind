@@ -55,6 +55,17 @@ describe("C extraction", () => {
     expect(ex.nodes.some(n => n.kind === "module" && n.id === "src/a.c::module")).toBe(true);
   });
 
+  it("extracts functions declared inside #ifdef blocks", () => {
+    // Covers the else { recurse } branch added to collectDecls for preproc conditionals
+    const ex = extractC(
+      `#ifdef DEBUG\nvoid debug_log(const char* msg) {}\n#endif\n`,
+      "src/log.c",
+    );
+    const fn = ex.nodes.find(n => n.label === "debug_log");
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe("function");
+  });
+
   it("produces no parse errors on valid C", () => {
     const ex = extractC(
       `#include <stdlib.h>\ntypedef struct { int x; int y; } Point;\nPoint make_point(int x, int y) { Point p = {x, y}; return p; }\n`,

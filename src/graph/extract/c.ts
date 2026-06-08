@@ -94,6 +94,11 @@ export function collectDecls(
           });
         }
       }
+    } else {
+      // Recurse into preprocessor conditionals (#ifdef, #if, preproc_if*),
+      // typedef wrappers, and other container nodes so nested declarations
+      // and includes are not silently dropped.
+      collectDecls(child, relativePath, result, declByName, moduleNode);
     }
   }
 }
