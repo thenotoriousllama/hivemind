@@ -17,6 +17,7 @@ import { forceSessionEndTrigger } from "../skillify/triggers.js";
 import { parseTranscript } from "../notifications/transcript-parser.js";
 import { appendUsageRecord } from "../notifications/usage-tracker.js";
 import { entrypointPassesOnlyCliGate } from "./shared/capture-gate.js";
+import { isHivemindPluginEnabled } from "../utils/plugin-state.js";
 
 const log = (msg: string) => _log("session-end", msg);
 
@@ -52,6 +53,7 @@ function recordSessionUsage(transcriptPath: string | undefined, sessionId: strin
 async function main(): Promise<void> {
   if (process.env.HIVEMIND_WIKI_WORKER === "1") return;
   if (process.env.HIVEMIND_CAPTURE === "false") return;
+  if (!isHivemindPluginEnabled()) { log("plugin disabled, skipping session-end"); return; }
   if (!entrypointPassesOnlyCliGate()) return;
 
   const input = await readStdin<StopInput>();
@@ -75,6 +77,18 @@ async function main(): Promise<void> {
 
   // (SkillOpt is NOT fired from SessionEnd — it fires immediately on the user's reaction
   // via UserPromptSubmit, so there's nothing to do at session end.)
+
+  // Skillify has its own per-project lock and must fire regardless of whether
+  // the wiki-worker lock below is already held. Fire it here, before the
+  // wiki-worker lock check, so a Periodic trigger that acquired the lock first
+  // doesn't silently suppress skill mining.
+  forceSessionEndTrigger({
+    config,
+    cwd: cwd || process.cwd(),
+    bundleDir: bundleDirFromImportMeta(import.meta.url),
+    agent: "claude_code",
+    sessionId,
+  });
 
   // Coordinate with the periodic worker: if one is already running for this
   // session, skip. Two workers writing the same summary row trip the
@@ -106,13 +120,7 @@ async function main(): Promise<void> {
     throw e;
   }
 
-  forceSessionEndTrigger({
-    config,
-    cwd,
-    bundleDir: bundleDirFromImportMeta(import.meta.url),
-    agent: "claude_code",
-    sessionId,
-  });
+  // (forceSessionEndTrigger already called above, before the wiki-worker lock check)
 }
 
 main().catch((e) => { log(`fatal: ${e.message}`); process.exit(0); });

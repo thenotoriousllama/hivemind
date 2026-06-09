@@ -1,6 +1,6 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { HOME, pkgRoot, ensureDir, copyDir, readJson, writeJson, writeJsonIfChanged, writeVersionStamp, log } from "./util.js";
+import { HOME, pkgRoot, ensureDir, copyDir, readJson, writeJson, writeJsonIfChanged, symlinkForce, writeVersionStamp, log } from "./util.js";
 import { getVersion } from "./version.js";
 
 // Cursor 1.7+ hooks API: https://cursor.com/docs/agent/hooks
@@ -112,6 +112,13 @@ export function installCursor(): void {
   // Idempotent (same rationale as codex): skip the rewrite when unchanged so
   // we don't perturb the hooks.json Cursor/Codex-style trust fingerprints.
   writeJsonIfChanged(HOOKS_PATH, merged);
+
+  const pluginNm = join(PLUGIN_DIR, "node_modules");
+  const embedDepsNm = join(HOME, ".hivemind", "embed-deps", "node_modules");
+  if (existsSync(embedDepsNm)) {
+    try { const st = lstatSync(pluginNm); if (st.isDirectory() && !st.isSymbolicLink()) rmSync(pluginNm, { recursive: true }); } catch { /* ok */ }
+    symlinkForce(embedDepsNm, pluginNm);
+  }
 
   writeVersionStamp(PLUGIN_DIR, getVersion());
   log(`  Cursor         installed -> ${PLUGIN_DIR}`);

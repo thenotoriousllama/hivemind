@@ -51,6 +51,11 @@ export interface DrainOptions {
    * stay IO-free.
    */
   latestInsightEntry?: LocalManifestEntry | null;
+  /**
+   * Current session count (1-based) for cadence rules. Populated by the hook
+   * entry point via bumpSessionCount so rules stay IO-free.
+   */
+  sessionCount?: number;
 }
 
 /**
@@ -79,6 +84,7 @@ export async function drainSessionStart(opts: DrainOptions): Promise<void> {
       state,
       localSkillsCount: opts.localSkillsCount ?? null,
       latestInsightEntry: opts.latestInsightEntry ?? null,
+      sessionCount: opts.sessionCount,
     };
 
     const fromRules = evaluateRules("session_start", ctx);

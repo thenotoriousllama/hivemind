@@ -37,6 +37,7 @@ import { bundleDirFromImportMeta, spawnCursorWikiWorker, wikiLog } from "./spawn
 import { tryStopCounterTrigger } from "../../skillify/triggers.js";
 import type { Config } from "../../config.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
+import { isHivemindPluginEnabled } from "../../utils/plugin-state.js";
 const log = (msg: string) => _log("cursor-capture", msg);
 
 function resolveEmbedDaemonPath(): string {
@@ -87,6 +88,7 @@ function resolveCwd(input: CursorCaptureInput): string {
 
 async function main(): Promise<void> {
   if (!CAPTURE) return;
+  if (!isHivemindPluginEnabled()) { log("plugin disabled, skipping capture"); return; }
   const input = await readStdin<CursorCaptureInput>();
   const config = loadConfig();
   if (!config) { log("no config"); return; }

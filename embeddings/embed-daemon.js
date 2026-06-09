@@ -2,7 +2,7 @@
 
 // dist/src/embeddings/daemon.js
 import { createServer } from "node:net";
-import { unlinkSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
+import { unlinkSync, writeFileSync, existsSync, mkdirSync as mkdirSync2, chmodSync } from "node:fs";
 
 // dist/src/embeddings/nomic.js
 import { createRequire } from "node:module";
@@ -133,8 +133,8 @@ var NomicEmbedder = class {
 };
 
 // dist/src/utils/debug.js
-import { appendFileSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join as join2 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 var LOG = join2(homedir2(), ".deeplake", "hook-debug.log");
 function isDebug() {
@@ -143,8 +143,12 @@ function isDebug() {
 function log(tag, msg) {
   if (!isDebug())
     return;
-  appendFileSync(LOG, `${(/* @__PURE__ */ new Date()).toISOString()} [${tag}] ${msg}
+  try {
+    mkdirSync(dirname(LOG), { recursive: true });
+    appendFileSync(LOG, `${(/* @__PURE__ */ new Date()).toISOString()} [${tag}] ${msg}
 `);
+  } catch {
+  }
 }
 
 // dist/src/embeddings/daemon.js
@@ -171,7 +175,7 @@ var EmbedDaemon = class {
     this.daemonPath = opts.daemonPath ?? process.argv[1] ?? "";
   }
   async start() {
-    mkdirSync(this.socketPath.replace(/\/[^/]+$/, ""), { recursive: true });
+    mkdirSync2(this.socketPath.replace(/\/[^/]+$/, ""), { recursive: true });
     writeFileSync(this.pidPath, String(process.pid), { mode: 384 });
     if (existsSync(this.socketPath)) {
       try {

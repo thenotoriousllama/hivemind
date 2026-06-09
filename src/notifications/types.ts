@@ -78,6 +78,13 @@ export interface NotificationContext {
    * IO-free.
    */
   latestInsightEntry?: LocalManifestEntry | null;
+  /**
+   * Number of distinct SessionStart fires seen for this install (1-based),
+   * persisted in notifications-state.json and deduped by session_id. Filled
+   * by the hook entry point so rules stay IO-free. Used by cadence rules that
+   * should wait N sessions (e.g. the referral nudge skips the first two).
+   */
+  sessionCount?: number;
 }
 
 export interface Rule {
@@ -97,6 +104,10 @@ export type Agent = "claude-code";
 export interface NotificationsState {
   /** id → { dedupKey JSON, ISO timestamp shown }. */
   shown: Record<string, { dedupKey: string; shownAt: string }>;
+  /** Count of distinct sessions seen (advanced by bumpSessionCount). */
+  sessionCount?: number;
+  /** session_id last counted — dedups the two parallel SessionStart fires. */
+  lastCountedSessionId?: string;
 }
 
 export interface NotificationsQueue {

@@ -1,7 +1,7 @@
-import { existsSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import * as yaml from "js-yaml";
-import { HOME, pkgRoot, ensureDir, copyDir, writeVersionStamp, log } from "./util.js";
+import { HOME, pkgRoot, ensureDir, copyDir, symlinkForce, writeVersionStamp, log } from "./util.js";
 import { getVersion } from "./version.js";
 import { ensureMcpServerInstalled, MCP_SERVER_PATH } from "./install-mcp-shared.js";
 
@@ -189,6 +189,12 @@ export function installHermes(): void {
   }
   ensureDir(HIVEMIND_DIR);
   copyDir(srcBundle, BUNDLE_DIR);
+  const pluginNm = join(HIVEMIND_DIR, "node_modules");
+  const embedDepsNm = join(HOME, ".hivemind", "embed-deps", "node_modules");
+  if (existsSync(embedDepsNm)) {
+    try { const st = lstatSync(pluginNm); if (st.isDirectory() && !st.isSymbolicLink()) rmSync(pluginNm, { recursive: true }); } catch { /* ok */ }
+    symlinkForce(embedDepsNm, pluginNm);
+  }
   writeVersionStamp(HIVEMIND_DIR, getVersion());
   log(`  Hermes         bundle installed -> ${BUNDLE_DIR}`);
 

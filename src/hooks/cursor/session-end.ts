@@ -33,28 +33,12 @@ async function main(): Promise<void> {
   const sessionId = input.conversation_id ?? input.session_id ?? "";
   log(`session=${sessionId || "?"} reason=${input.reason ?? "?"} status=${input.final_status ?? "?"}`);
   if (!sessionId) return;
-  // Coordinate with the periodic worker: skip the final spawn if a periodic
-  // is mid-flight. Lock TTL covers crashed workers.
-  if (!tryAcquireLock(sessionId)) {
-    wikiLog(`SessionEnd: periodic worker already running for ${sessionId}, skipping final`);
-    return;
-  }
   const config = loadConfig();
   if (!config) { wikiLog(`SessionEnd: no config, skipping summary`); return; }
 
-  // Spawn the wiki and skillify workers independently — a failure of one
-  // must not suppress the other. Each is wrapped in its own try.
-  try {
-    spawnCursorWikiWorker({
-      config,
-      sessionId,
-      cwd: process.cwd(),
-      bundleDir: bundleDirFromImportMeta(import.meta.url),
-      reason: "SessionEnd",
-    });
-  } catch (e: any) {
-    wikiLog(`SessionEnd: wiki spawn failed: ${e?.message ?? e}`);
-  }
+  // Skillify has its own per-project lock — fire before the wiki-worker lock
+  // check so a Periodic trigger that already holds the lock doesn't suppress
+  // skill mining.
   try {
     forceSessionEndTrigger({
       config,
@@ -65,6 +49,25 @@ async function main(): Promise<void> {
     });
   } catch (e: any) {
     wikiLog(`SessionEnd: skillify trigger failed: ${e?.message ?? e}`);
+  }
+
+  // Coordinate with the periodic worker: skip the final spawn if a periodic
+  // is mid-flight. Lock TTL covers crashed workers.
+  if (!tryAcquireLock(sessionId)) {
+    wikiLog(`SessionEnd: periodic worker already running for ${sessionId}, skipping final`);
+    return;
+  }
+
+  try {
+    spawnCursorWikiWorker({
+      config,
+      sessionId,
+      cwd: process.cwd(),
+      bundleDir: bundleDirFromImportMeta(import.meta.url),
+      reason: "SessionEnd",
+    });
+  } catch (e: any) {
+    wikiLog(`SessionEnd: wiki spawn failed: ${e?.message ?? e}`);
   }
 }
 

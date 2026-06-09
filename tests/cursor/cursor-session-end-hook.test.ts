@@ -6,6 +6,7 @@ const tryAcquireLockMock = vi.fn();
 const loadConfigMock = vi.fn();
 const spawnCursorWikiWorkerMock = vi.fn();
 const wikiLogMock = vi.fn();
+const forceSessionEndTriggerMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: unknown[]) => stdinMock(...a) }));
 vi.mock("../../src/utils/debug.js", () => ({ log: (_tag: string, msg: string) => debugLogMock(msg) }));
@@ -17,6 +18,9 @@ vi.mock("../../src/hooks/cursor/spawn-wiki-worker.js", () => ({
   spawnCursorWikiWorker: (...a: unknown[]) => spawnCursorWikiWorkerMock(...a),
   wikiLog: (...a: unknown[]) => wikiLogMock(...a),
   bundleDirFromImportMeta: () => "/tmp/bundle",
+}));
+vi.mock("../../src/skillify/triggers.js", () => ({
+  forceSessionEndTrigger: (...a: unknown[]) => forceSessionEndTriggerMock(...a),
 }));
 
 const validConfig = {
@@ -46,6 +50,7 @@ beforeEach(() => {
   loadConfigMock.mockReset().mockReturnValue(validConfig);
   spawnCursorWikiWorkerMock.mockReset();
   wikiLogMock.mockReset();
+  forceSessionEndTriggerMock.mockReset();
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -106,6 +111,17 @@ describe("cursor session-end hook (stub)", () => {
     expect(tryAcquireLockMock).toHaveBeenCalledWith("conv-9");
     expect(spawnCursorWikiWorkerMock).not.toHaveBeenCalled();
     expect(wikiLogMock).toHaveBeenCalledWith(expect.stringContaining("periodic worker already running"));
+  });
+
+  it("fires skillify trigger even when wiki-worker lock is already held (lock-contention regression)", async () => {
+    stdinMock.mockResolvedValue({ conversation_id: "conv-contention" });
+    tryAcquireLockMock.mockReturnValue(false);
+    await runHook();
+    expect(spawnCursorWikiWorkerMock).not.toHaveBeenCalled();
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledTimes(1);
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "conv-contention", agent: "cursor" }),
+    );
   });
 
   it("loadConfig returns null → log and skip without crashing", async () => {

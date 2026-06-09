@@ -25,9 +25,13 @@ const markSessionEndedMock = vi.fn();
 const parseTranscriptMock = vi.fn();
 const appendUsageRecordMock = vi.fn();
 const debugLogMock = vi.fn();
+const forceSessionEndTriggerMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
 vi.mock("../../src/config.js", () => ({ loadConfig: (...a: any[]) => loadConfigMock(...a) }));
+vi.mock("../../src/skillify/triggers.js", () => ({
+  forceSessionEndTrigger: (...a: any[]) => forceSessionEndTriggerMock(...a),
+}));
 vi.mock("../../src/hooks/spawn-wiki-worker.js", () => ({
   spawnWikiWorker: (...a: any[]) => spawnMock(...a),
   wikiLog: (...a: any[]) => wikiLogMock(...a),
@@ -75,6 +79,7 @@ beforeEach(() => {
   parseTranscriptMock.mockReset().mockReturnValue({ memorySearchCount: 0, memorySearchBytes: 0 });
   appendUsageRecordMock.mockReset();
   debugLogMock.mockReset();
+  forceSessionEndTriggerMock.mockReset();
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -117,6 +122,19 @@ describe("session-end hook", () => {
     expect(spawnMock).not.toHaveBeenCalled();
     expect(wikiLogMock).toHaveBeenCalledWith(
       expect.stringContaining("periodic worker already running for sid-1, skipping"),
+    );
+  });
+
+  it("fires skillify trigger even when the wiki-worker lock is already held (lock-contention regression)", async () => {
+    // Same session-id used by a concurrent/prior conversation that holds the wiki lock.
+    tryAcquireLockMock.mockReturnValue(false);
+    await runHook();
+    // Wiki worker must NOT spawn (lock held).
+    expect(spawnMock).not.toHaveBeenCalled();
+    // Skillify trigger MUST fire regardless — it has its own lock.
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledTimes(1);
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sid-1", agent: "claude_code" }),
     );
   });
 

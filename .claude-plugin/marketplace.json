@@ -6,18 +6,18 @@
   },
   "metadata": {
     "description": "Cloud-backed persistent shared memory for AI agents powered by Deeplake",
-    "version": "0.7.78"
+    "version": "0.7.84"
   },
   "plugins": [
     {
       "name": "hivemind",
       "description": "Persistent shared memory powered by Deeplake — captures all session activity and provides cross-session, cross-agent memory search",
-      "version": "0.7.78",
+      "version": "0.7.84",
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/activeloopai/hivemind.git",
         "path": "claude-code",
-        "sha": "64e787b7d16918e72a53395fd79edc36836a2bd2"
+        "sha": "8a8816eed1383f609f3a1b912767dd043de4a2da"
       },
       "homepage": "https://github.com/activeloopai/hivemind"
     }

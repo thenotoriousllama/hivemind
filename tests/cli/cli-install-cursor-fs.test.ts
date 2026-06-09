@@ -116,6 +116,41 @@ describe("installCursor", () => {
     const { installCursor } = await importInstaller();
     expect(() => installCursor()).toThrow(/Cursor bundle missing/);
   });
+
+  it("creates embed-deps symlink when ~/.hivemind/embed-deps/node_modules exists", async () => {
+    const embedDepsNm = join(tmpHome, ".hivemind", "embed-deps", "node_modules");
+    mkdirSync(embedDepsNm, { recursive: true });
+
+    const { installCursor } = await importInstaller();
+    installCursor();
+
+    const pluginNm = join(tmpHome, ".cursor", "hivemind", "node_modules");
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(pluginNm).isSymbolicLink()).toBe(true);
+  });
+
+  it("replaces an existing real directory at pluginNm with a symlink when embed-deps present", async () => {
+    const embedDepsNm = join(tmpHome, ".hivemind", "embed-deps", "node_modules");
+    mkdirSync(embedDepsNm, { recursive: true });
+    // Pre-create a real directory where the symlink should go
+    const pluginNm = join(tmpHome, ".cursor", "hivemind", "node_modules");
+    mkdirSync(pluginNm, { recursive: true });
+
+    const { installCursor } = await importInstaller();
+    installCursor();
+
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(pluginNm).isSymbolicLink()).toBe(true);
+  });
+
+  it("skips embed-deps symlink when ~/.hivemind/embed-deps/node_modules is absent", async () => {
+    const { installCursor } = await importInstaller();
+    installCursor();
+
+    const pluginNm = join(tmpHome, ".cursor", "hivemind", "node_modules");
+    // No symlink should exist — embed-deps dir was never created
+    expect(existsSync(pluginNm)).toBe(false);
+  });
 });
 
 describe("uninstallCursor", () => {

@@ -28,6 +28,7 @@ import { reactSkillOpt } from "./shared/skillopt-hook.js";
 import { EmbedClient } from "../embeddings/client.js";
 import { embeddingSqlLiteral } from "../embeddings/sql.js";
 import { embeddingsDisabled } from "../embeddings/disable.js";
+import { isHivemindPluginEnabled } from "../utils/plugin-state.js";
 import { ensurePluginNodeModulesLink } from "../embeddings/self-heal.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -76,6 +77,7 @@ const CAPTURE = process.env.HIVEMIND_CAPTURE !== "false";
 
 async function main(): Promise<void> {
   if (!CAPTURE) return;
+  if (!isHivemindPluginEnabled()) { log("plugin disabled, skipping capture"); return; }
   if (!entrypointPassesOnlyCliGate()) return;
   const input = await readStdin<HookInput>();
   const config = loadConfig();

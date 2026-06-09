@@ -26,27 +26,13 @@ async function main(): Promise<void> {
   const sessionId = input.session_id ?? "";
   log(`session=${sessionId || "?"} cwd=${input.cwd ?? "?"}`);
   if (!sessionId) return;
-  if (!tryAcquireLock(sessionId)) {
-    wikiLog(`SessionEnd: periodic worker already running for ${sessionId}, skipping final`);
-    return;
-  }
   const config = loadConfig();
   if (!config) { wikiLog(`SessionEnd: no config, skipping summary`); return; }
   const cwd = input.cwd ?? process.cwd();
 
-  // Independent try blocks per worker — a failure in wiki spawn must not
-  // suppress the skillify trigger and vice versa.
-  try {
-    spawnHermesWikiWorker({
-      config,
-      sessionId,
-      cwd,
-      bundleDir: bundleDirFromImportMeta(import.meta.url),
-      reason: "SessionEnd",
-    });
-  } catch (e: any) {
-    wikiLog(`SessionEnd: wiki spawn failed: ${e?.message ?? e}`);
-  }
+  // Skillify has its own per-project lock — fire before the wiki-worker lock
+  // check so a Periodic trigger that already holds the lock doesn't suppress
+  // skill mining.
   try {
     forceSessionEndTrigger({
       config,
@@ -57,6 +43,23 @@ async function main(): Promise<void> {
     });
   } catch (e: any) {
     wikiLog(`SessionEnd: skillify trigger failed: ${e?.message ?? e}`);
+  }
+
+  if (!tryAcquireLock(sessionId)) {
+    wikiLog(`SessionEnd: periodic worker already running for ${sessionId}, skipping final`);
+    return;
+  }
+
+  try {
+    spawnHermesWikiWorker({
+      config,
+      sessionId,
+      cwd,
+      bundleDir: bundleDirFromImportMeta(import.meta.url),
+      reason: "SessionEnd",
+    });
+  } catch (e: any) {
+    wikiLog(`SessionEnd: wiki spawn failed: ${e?.message ?? e}`);
   }
 }
 

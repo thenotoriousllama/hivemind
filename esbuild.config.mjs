@@ -63,12 +63,18 @@ await build({
     "onnxruntime-node",
     "onnxruntime-common",
     "sharp",
-    // graph-on-stop hook transitively imports the tree-sitter parser
-    // (via runBuildCommand → extractTypeScript). Native .node prebuilds
-    // can't be bundled by esbuild; resolved from node_modules at runtime.
+    // tree-sitter and language grammars ship native .node prebuilds that
+    // esbuild cannot bundle. Resolved from node_modules at runtime.
     "tree-sitter",
     "tree-sitter-typescript",
+    "tree-sitter-javascript",
     "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
   ],
   define: {
     __HIVEMIND_VERSION__: JSON.stringify(hivemindVersion),
@@ -89,6 +95,9 @@ const codexHooks = [
   { entry: "dist/src/hooks/codex/stop.js", out: "stop" },
   { entry: "dist/src/hooks/codex/wiki-worker.js", out: "wiki-worker" },
   { entry: "dist/src/skillify/skillify-worker.js", out: "skillify-worker" },
+  // SkillOpt worker — codex's capture spawns it on a user reaction to judge + improve a
+  // recently-used org skill (judging runs on the codex CLI). Same shared module CC uses.
+  { entry: "dist/src/skillify/skillopt-worker.js", out: "skillopt-worker" },
   { entry: "dist/src/hooks/graph-pull-worker.js", out: "graph-pull-worker" },
   // G3: code-graph auto-build parity for Codex (same shared hook as CC/Cursor).
   { entry: "dist/src/hooks/graph-on-stop.js", out: "graph-on-stop" },
@@ -122,10 +131,17 @@ await build({
     "onnxruntime-node",
     "onnxruntime-common",
     "sharp",
-    // graph-on-stop transitively imports the tree-sitter native parser (G3).
+    // graph-pull-worker transitively imports all language extractors.
     "tree-sitter",
     "tree-sitter-typescript",
+    "tree-sitter-javascript",
     "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
   ],
   define: {
     __HIVEMIND_VERSION__: JSON.stringify(hivemindVersion),
@@ -161,6 +177,9 @@ const hermesHooks = [
   { entry: "dist/src/hooks/hermes/pre-tool-use.js", out: "pre-tool-use" },
   { entry: "dist/src/hooks/hermes/wiki-worker.js", out: "wiki-worker" },
   { entry: "dist/src/skillify/skillify-worker.js", out: "skillify-worker" },
+  // SkillOpt worker — hermes capture spawns it on a reaction to judge + improve a recently-used
+  // org skill (judging runs on the hermes CLI). Same shared module CC uses.
+  { entry: "dist/src/skillify/skillopt-worker.js", out: "skillopt-worker" },
   { entry: "dist/src/hooks/graph-pull-worker.js", out: "graph-pull-worker" },
   // G3: code-graph auto-build parity for Hermes (registered on on_session_end).
   { entry: "dist/src/hooks/graph-on-stop.js", out: "graph-on-stop" },
@@ -194,13 +213,17 @@ await build({
     "onnxruntime-node",
     "onnxruntime-common",
     "sharp",
-    // graph-on-stop transitively imports the tree-sitter native parser
-    // (via runBuildCommand → extractTypeScript); same externalization as
-    // the Claude Code bundle. Native .node prebuilds resolve from
-    // node_modules at runtime.
+    // graph-pull-worker transitively imports all language extractors.
     "tree-sitter",
     "tree-sitter-typescript",
+    "tree-sitter-javascript",
     "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
   ],
   define: {
     __HIVEMIND_VERSION__: JSON.stringify(hivemindVersion),
@@ -239,10 +262,17 @@ await build({
     "onnxruntime-node",
     "onnxruntime-common",
     "sharp",
-    // graph-on-stop transitively imports the tree-sitter native parser (G3).
+    // graph-pull-worker transitively imports all language extractors.
     "tree-sitter",
     "tree-sitter-typescript",
+    "tree-sitter-javascript",
     "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
   ],
   define: {
     __HIVEMIND_VERSION__: JSON.stringify(hivemindVersion),
@@ -267,6 +297,9 @@ const piWorker = [
   { entry: "dist/src/hooks/pi/wiki-worker.js", out: "wiki-worker" },
   { entry: "dist/src/skillify/skillify-worker.js", out: "skillify-worker" },
   { entry: "dist/src/skillify/autopull-worker.js", out: "autopull-worker" },
+  // SkillOpt worker — pi spawns it on a user reaction (the extension can't import the
+  // raw-.ts trigger, so it shells this bundle like the others). Same shared module CC uses.
+  { entry: "dist/src/skillify/skillopt-worker.js", out: "skillopt-worker" },
 ];
 await build({
   entryPoints: Object.fromEntries(piWorker.map(h => [h.out, h.entry])),
@@ -494,15 +527,18 @@ await build({
     "node:*",
     "node-liblzma",
     "@mongodb-js/zstd",
-    // tree-sitter ships native .node prebuilds via prebuild-install. esbuild
-    // can't bundle .node files, and even if it could, native bindings have to
-    // be loaded from disk at runtime. The CLI resolves them from its sibling
-    // node_modules — same pattern as transformers/onnxruntime in the embed-
-    // daemon bundle. Imported via src/commands/graph.ts (codebase-graph
-    // Phase 1).
+    // tree-sitter and language grammars ship native .node prebuilds that
+    // esbuild cannot bundle. Resolved from node_modules at runtime.
     "tree-sitter",
     "tree-sitter-typescript",
+    "tree-sitter-javascript",
     "tree-sitter-python",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
   ],
   banner: { js: "#!/usr/bin/env node" },
 });

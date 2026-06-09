@@ -6,6 +6,7 @@ const tryAcquireLockMock = vi.fn();
 const loadConfigMock = vi.fn();
 const spawnHermesWikiWorkerMock = vi.fn();
 const wikiLogMock = vi.fn();
+const forceSessionEndTriggerMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: unknown[]) => stdinMock(...a) }));
 vi.mock("../../src/utils/debug.js", () => ({ log: (_tag: string, msg: string) => debugLogMock(msg) }));
@@ -17,6 +18,9 @@ vi.mock("../../src/hooks/hermes/spawn-wiki-worker.js", () => ({
   spawnHermesWikiWorker: (...a: unknown[]) => spawnHermesWikiWorkerMock(...a),
   wikiLog: (...a: unknown[]) => wikiLogMock(...a),
   bundleDirFromImportMeta: () => "/tmp/bundle",
+}));
+vi.mock("../../src/skillify/triggers.js", () => ({
+  forceSessionEndTrigger: (...a: unknown[]) => forceSessionEndTriggerMock(...a),
 }));
 
 const validConfig = {
@@ -44,6 +48,7 @@ beforeEach(() => {
   loadConfigMock.mockReset().mockReturnValue(validConfig);
   spawnHermesWikiWorkerMock.mockReset();
   wikiLogMock.mockReset();
+  forceSessionEndTriggerMock.mockReset();
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -91,6 +96,17 @@ describe("hermes session-end hook (stub)", () => {
     expect(tryAcquireLockMock).toHaveBeenCalledWith("ses-9");
     expect(spawnHermesWikiWorkerMock).not.toHaveBeenCalled();
     expect(wikiLogMock).toHaveBeenCalledWith(expect.stringContaining("periodic worker already running"));
+  });
+
+  it("fires skillify trigger even when wiki-worker lock is already held (lock-contention regression)", async () => {
+    stdinMock.mockResolvedValue({ session_id: "ses-contention" });
+    tryAcquireLockMock.mockReturnValue(false);
+    await runHook();
+    expect(spawnHermesWikiWorkerMock).not.toHaveBeenCalled();
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledTimes(1);
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "ses-contention", agent: "hermes" }),
+    );
   });
 
   it("loadConfig returns null → log and skip without crashing", async () => {

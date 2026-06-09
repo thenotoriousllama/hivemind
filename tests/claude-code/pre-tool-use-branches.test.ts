@@ -539,7 +539,7 @@ describe("processPreToolUse: find / grep / fallback", () => {
     expect(d?.command).not.toContain("RETRY REQUIRED");
   });
 
-  it("Bash `find <dir> -type d -name '<pat>'` falls through to guidance (type filter unsupported)", async () => {
+  it("Bash `find <dir> -type d -name '<pat>'` falls through to the VFS shell (type filter not handled inline)", async () => {
     const findVirtualPathsFn = vi.fn(async () => ["/x.json"]) as any;
     const d = await processPreToolUse(
       { session_id: "s", tool_name: "Bash", tool_input: { command: "find ~/.deeplake/memory/sessions -type d -name '*.json'" }, tool_use_id: "t" },
@@ -551,9 +551,11 @@ describe("processPreToolUse: find / grep / fallback", () => {
         logFn: vi.fn(),
       },
     );
-    // Must NOT be served (the -type filter would be silently dropped).
+    // The inline find handler doesn't match -type d, so it falls through to the
+    // VFS shell bundle which handles it in the sandboxed interpreter.
     expect(findVirtualPathsFn).not.toHaveBeenCalled();
-    expect(d?.command).toContain("RETRY REQUIRED");
+    expect(d?.command).toContain("deeplake-shell.js");
+    expect(d?.command).not.toContain("RETRY REQUIRED");
   });
 
   it("Bash `find … | wc -l` returns the count", async () => {
@@ -589,7 +591,7 @@ describe("processPreToolUse: find / grep / fallback", () => {
     expect(d?.command).toContain("match line");
   });
 
-  it("returns retry guidance (does NOT fall through to the host shell) when the direct-read path throws", async () => {
+  it("falls back to the VFS shell (does NOT fall through to the host shell) when the direct-read path throws", async () => {
     const d = await processPreToolUse(
       { session_id: "s", tool_name: "Bash", tool_input: { command: "cat ~/.deeplake/memory/sessions/a.json" }, tool_use_id: "t" },
       {
@@ -600,7 +602,9 @@ describe("processPreToolUse: find / grep / fallback", () => {
         logFn: vi.fn(),
       },
     );
-    expect(d?.command).toContain("[RETRY REQUIRED]");
+    // Direct query threw → falls through to VFS shell bundle (sandboxed, not the host shell).
+    expect(d?.command).toContain("deeplake-shell.js");
+    expect(d?.command).not.toContain("RETRY REQUIRED");
   });
 
   it("returns a not-found result (not retry guidance) for a concrete cat on a missing VFS file", async () => {
@@ -619,10 +623,11 @@ describe("processPreToolUse: find / grep / fallback", () => {
     expect(d?.command).not.toContain("RETRY REQUIRED");
   });
 
-  it("returns retry guidance for an isSafe-but-unroutable memory command instead of running it on the host", async () => {
-    // `sort` passes isSafe() (it's an allowlisted builtin) but no VFS handler
-    // serves it; it must be rewritten to the harmless echo guidance, not handed
-    // back to the real shell where it would read /etc/passwd and write /tmp/out.
+  it("routes an isSafe-but-unroutable memory command to the VFS shell instead of the host shell", async () => {
+    // `sort` passes isSafe() but no inline VFS handler serves it. It is routed
+    // to the VFS shell bundle — a sandboxed Node.js interpreter — NOT handed to
+    // the real host shell. Inside the VFS shell `/etc/passwd` is just a path
+    // name against the SQL backend (no real file access occurs).
     const d = await processPreToolUse(
       { session_id: "s", tool_name: "Bash", tool_input: { command: "sort /etc/passwd ~/.deeplake/memory/index.md > /tmp/out" }, tool_use_id: "t" },
       {
@@ -632,8 +637,8 @@ describe("processPreToolUse: find / grep / fallback", () => {
         logFn: vi.fn(),
       },
     );
-    expect(d?.command).toContain("[RETRY REQUIRED]");
-    expect(d?.command).not.toContain("/etc/passwd");
+    expect(d?.command).toContain("deeplake-shell.js");
+    expect(d?.command).not.toContain("RETRY REQUIRED");
   });
 });
 

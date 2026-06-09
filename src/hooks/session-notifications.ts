@@ -14,19 +14,19 @@
 
 import { loadCredentials } from "../commands/auth.js";
 import { readStdin } from "../utils/stdin.js";
-import { drainSessionStart } from "../notifications/index.js";
+import { drainSessionStart, registerRule } from "../notifications/index.js";
+import { bumpSessionCount } from "../notifications/state.js";
+import { referralInviteRule } from "../notifications/rules/referral-invite.js";
 import { log as _log } from "../utils/debug.js";
 
 const log = (msg: string) => _log("session-notifications", msg);
 
-// No session_start rules are registered. Welcome/savings and the anonymous
-// signup brief are all rendered by pickPrimaryBanner inside
-// drainSessionStart (see sources/primary-banner.ts). localMinedRule used to
-// fire here as an additional anonymous "N skills mined → login" nudge, but
-// the cold-start signup brief now owns the anonymous conversion slot — two
-// login nudges in one session was noise. The rule + its unit tests remain
-// in the tree, just unregistered, so it can be revived if we want a
-// separate skill-sharing surface later.
+// Welcome/savings and the anonymous signup brief are rendered by
+// pickPrimaryBanner inside drainSessionStart (see sources/primary-banner.ts).
+// The referral nudge is a registered rule: it fires once, from the 3rd session
+// on, for signed-in users (see rules/referral-invite.ts). localMinedRule
+// remains in the tree but unregistered.
+registerRule(referralInviteRule);
 
 interface SessionStartInput {
   session_id?: string;
@@ -55,8 +55,13 @@ async function main(): Promise<void> {
   const sessionId = rawSessionId.length > 0 ? rawSessionId : undefined;
   const source = typeof input?.source === "string" ? input.source : undefined;
 
+  // Advance the per-install session counter (deduped by session_id across the
+  // two parallel hook fires) so cadence rules like the referral nudge can wait
+  // out the first sessions.
+  const sessionCount = bumpSessionCount(sessionId);
+
   const creds = loadCredentials();
-  await drainSessionStart({ agent: "claude-code", creds, sessionId, source });
+  await drainSessionStart({ agent: "claude-code", creds, sessionId, source, sessionCount });
 }
 
 main().catch((e) => { log(`fatal: ${e?.message ?? String(e)}`); process.exit(0); });

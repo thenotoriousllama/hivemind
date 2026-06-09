@@ -145,6 +145,19 @@ async function main(): Promise<void> {
   // Coordinate with the periodic worker: if one is already running for this
   // session, skip. Two workers writing the same summary row trip the
   // Deeplake UPDATE-coalescing quirk (see CLAUDE.md) and drop one write.
+  const cwd = input.cwd || process.cwd();
+
+  // Skillify has its own per-project lock — fire before the wiki-worker lock
+  // check so a Periodic trigger that already holds the lock doesn't suppress
+  // skill mining.
+  forceSessionEndTrigger({
+    config,
+    cwd,
+    bundleDir: bundleDirFromImportMeta(import.meta.url),
+    agent: "codex",
+    sessionId,
+  });
+
   if (!tryAcquireLock(sessionId)) {
     wikiLog(`Stop: periodic worker already running for ${sessionId}, skipping`);
     return;
@@ -155,7 +168,7 @@ async function main(): Promise<void> {
     spawnCodexWikiWorker({
       config,
       sessionId,
-      cwd: input.cwd ?? "",
+      cwd,
       bundleDir: bundleDirFromImportMeta(import.meta.url),
       reason: "Stop",
     });
@@ -171,18 +184,6 @@ async function main(): Promise<void> {
     }
     throw e;
   }
-
-  // Skillify: Codex Stop is the end-of-session signal (no separate SessionEnd
-  // hook). Always force-fire — same shape as Claude Code's SessionEnd path.
-  // The forceSessionEndTrigger helper resets the counter internally so the
-  // mid-session Stop counter doesn't double-fire on the same window.
-  forceSessionEndTrigger({
-    config,
-    cwd: input.cwd ?? "",
-    bundleDir: bundleDirFromImportMeta(import.meta.url),
-    agent: "codex",
-    sessionId,
-  });
 }
 
 main().catch((e) => { log(`fatal: ${e.message}`); process.exit(0); });

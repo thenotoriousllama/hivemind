@@ -19,6 +19,7 @@ const tryAcquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const debugLogMock = vi.fn();
 const queryMock = vi.fn();
+const forceSessionEndTriggerMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...args: any[]) => stdinMock(...args) }));
 vi.mock("../../src/config.js", () => ({ loadConfig: (...args: any[]) => loadConfigMock(...args) }));
@@ -42,6 +43,9 @@ vi.mock("../../src/embeddings/client.js", () => ({
     embed(_text: string, _kind?: string) { return Promise.resolve(null); }
     warmup() { return Promise.resolve(false); }
   },
+}));
+vi.mock("../../src/skillify/triggers.js", () => ({
+  forceSessionEndTrigger: (...args: any[]) => forceSessionEndTriggerMock(...args),
 }));
 
 async function runHook(env: Record<string, string | undefined> = {}): Promise<void> {
@@ -78,6 +82,7 @@ beforeEach(() => {
   releaseLockMock.mockReset();
   debugLogMock.mockReset();
   queryMock.mockReset().mockResolvedValue([]);
+  forceSessionEndTriggerMock.mockReset();
 });
 
 afterEach(() => {
@@ -239,6 +244,16 @@ describe("codex stop hook — wiki spawn + lock coordination", () => {
     expect(spawnMock).not.toHaveBeenCalled();
     expect(wikiLogMock).toHaveBeenCalledWith(
       expect.stringContaining("periodic worker already running for sid-1, skipping"),
+    );
+  });
+
+  it("fires skillify trigger even when wiki-worker lock is already held (lock-contention regression)", async () => {
+    tryAcquireLockMock.mockReturnValue(false);
+    await runHook();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledTimes(1);
+    expect(forceSessionEndTriggerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sid-1", agent: "codex" }),
     );
   });
 

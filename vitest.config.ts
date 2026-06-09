@@ -366,6 +366,7 @@ export default defineConfig({
         "src/notifications/state.ts":             { statements: 90, branches: 75, functions: 90, lines: 90 },
         "src/notifications/rules/registry.ts":    { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/notifications/rules/welcome.ts":     { statements: 90, branches: 90, functions: 90, lines: 90 },
+        "src/notifications/rules/referral-invite.ts": { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/notifications/sources/backend.ts":   { statements: 90, branches: 90, functions: 80, lines: 90 },
         // feat/resume-next-steps — resume-brief windowing (skip placeholders +
         // dedup) and the goal capture/get CLI. pickResumeBrief is exercised via
@@ -479,6 +480,19 @@ export default defineConfig({
         // fully exercised by tests/claude-code/wiki-worker-windows.test.ts.
         "src/utils/resolve-cli-bin.ts":      { statements: 90, branches: 90, functions: 90, lines: 90 },
         "src/hooks/wiki-worker-spawn.ts":    { statements: 90, branches: 90, functions: 90, lines: 90 },
+        // feat(graph): multi-language support (PR #241) — 8 new language extractors
+        // + shared helper module. Branches calibrated below statements: each
+        // extractor has error/fallback branches (isError, isMissing, unknown node
+        // types) that aren't triggered by happy-path tests without crafting
+        // pathological ASTs. Floors set 5–10 pts below measured coverage.
+        "src/graph/extract/shared.ts":       { statements: 80, branches: 75, functions: 90, lines: 80 },
+        "src/graph/extract/javascript.ts":   { statements: 70, branches: 50, functions: 90, lines: 75 },
+        "src/graph/extract/go.ts":           { statements: 80, branches: 60, functions: 90, lines: 85 },
+        "src/graph/extract/rust.ts":         { statements: 80, branches: 60, functions: 85, lines: 90 },
+        "src/graph/extract/java.ts":         { statements: 85, branches: 65, functions: 90, lines: 90 },
+        "src/graph/extract/ruby.ts":         { statements: 90, branches: 75, functions: 90, lines: 90 },
+        "src/graph/extract/c.ts":            { statements: 85, branches: 70, functions: 90, lines: 90 },
+        "src/graph/extract/cpp.ts":          { statements: 80, branches: 60, functions: 90, lines: 85 },
       },
     },
   },

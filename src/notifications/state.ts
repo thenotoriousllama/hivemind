@@ -36,10 +36,29 @@ export function readState(): NotificationsState {
       log(`state malformed → treating as empty`);
       return { shown: {} };
     }
-    return { shown: { ...parsed.shown } };
+    return {
+      shown: { ...parsed.shown },
+      sessionCount: typeof parsed.sessionCount === "number" ? parsed.sessionCount : undefined,
+      lastCountedSessionId: typeof parsed.lastCountedSessionId === "string" ? parsed.lastCountedSessionId : undefined,
+    };
   } catch {
     return { shown: {} };
   }
+}
+
+// bumpSessionCount advances the persisted session counter once per session and
+// returns the new count. Deduped by session_id so the two parallel SessionStart
+// fires (settings.json + marketplace hooks.json) don't double-count. A missing
+// session_id leaves the count unchanged (can't dedup safely).
+export function bumpSessionCount(sessionId?: string): number {
+  const state = readState();
+  const current = state.sessionCount ?? 0;
+  if (!sessionId || state.lastCountedSessionId === sessionId) {
+    return current;
+  }
+  const next = current + 1;
+  writeState({ ...state, sessionCount: next, lastCountedSessionId: sessionId });
+  return next;
 }
 
 export function writeState(state: NotificationsState): void {
@@ -57,6 +76,7 @@ export function writeState(state: NotificationsState): void {
 
 export function markShown(state: NotificationsState, n: Notification, now: Date = new Date()): NotificationsState {
   return {
+    ...state,
     shown: {
       ...state.shown,
       [n.id]: { dedupKey: JSON.stringify(n.dedupKey), shownAt: now.toISOString() },

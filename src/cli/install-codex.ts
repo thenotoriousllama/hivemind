@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { HOME, pkgRoot, ensureDir, copyDir, writeJson, writeJsonIfChanged, symlinkForce, writeVersionStamp, log, warn } from "./util.js";
@@ -255,6 +255,20 @@ export function installCodex(): void {
     symlinkForce(skillTarget, SKILL_LINK);
   } else {
     warn(`  Codex          skill source missing at ${skillTarget}; skipping symlink`);
+  }
+
+  // Link node_modules to embed-deps so graph-on-stop.js (which uses the
+  // external tree-sitter native module) can resolve it. The capture hook's
+  // ensurePluginNodeModulesLink skips existing real directories — so we
+  // replace an empty placeholder dir with a symlink here at install time.
+  const pluginNm = join(PLUGIN_DIR, "node_modules");
+  const embedDepsNm = join(HOME, ".hivemind", "embed-deps", "node_modules");
+  if (existsSync(embedDepsNm)) {
+    try {
+      const st = lstatSync(pluginNm);
+      if (st.isDirectory() && !st.isSymbolicLink()) rmSync(pluginNm, { recursive: true });
+    } catch { /* not found — ok */ }
+    symlinkForce(embedDepsNm, pluginNm);
   }
 
   writeVersionStamp(PLUGIN_DIR, getVersion());
