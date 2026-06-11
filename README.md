@@ -17,7 +17,6 @@
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg?style=for-the-badge" alt="Node"></a>
   <a href="https://deeplake.ai"><img src="https://img.shields.io/badge/Powered%20by-Deeplake-orange.svg?style=for-the-badge" alt="Deeplake"></a>
   <a href="https://www.ycombinator.com"><img src="https://img.shields.io/badge/Y%20Combinator-backed-ff6600.svg?style=for-the-badge" alt="Y Combinator backed"></a>
-  <a href="https://discord.gg/EeGjnyDBx"><img src="https://img.shields.io/badge/Discord-chat-5865F2?logo=discord&logoColor=white&style=for-the-badge" alt="Join us on Discord"></a>
   <a href="https://join.slack.com/t/hubdb/shared_invite/zt-35zr0yil0-lnzJcQhACsBlB7~3lufrCg"><img src="https://img.shields.io/badge/Slack-chat-4A154B?logo=slack&logoColor=white&style=for-the-badge" alt="Join us on Slack"></a>
 </p>
 
@@ -420,11 +419,9 @@ We run Hivemind ourselves, all day, across Claude Code, OpenClaw, Codex, and Cur
 
 ## Got questions?
 
-Setup, BYOC, agent integrations, or workflow. Come ask in the community. We hang out on both:
+Setup, BYOC, agent integrations, or workflow. Come ask in the community:
 
 <p align="center">
-  <a href="https://discord.gg/EeGjnyDBx"><img src="https://img.shields.io/badge/Join_us_on-Discord-5865F2?logo=discord&logoColor=white&style=for-the-badge" alt="Join us on Discord"></a>
-  &nbsp;
   <a href="https://join.slack.com/t/hubdb/shared_invite/zt-35zr0yil0-lnzJcQhACsBlB7~3lufrCg"><img src="https://img.shields.io/badge/Join_us_on-Slack-4A154B?logo=slack&logoColor=white&style=for-the-badge" alt="Join us on Slack"></a>
 </p>
 
