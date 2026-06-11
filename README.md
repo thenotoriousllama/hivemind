@@ -61,7 +61,7 @@ The agent reaches the answer in fewer turns with less context, because the prior
 One command, all your agents:
 
 ```bash
-npm install -g @deeplake/hivemind && hivemind install
+npm i -g @deeplake/hivemind && hivemind install
 ```
 
 The installer detects every supported assistant on your machine (table below), wires up the hooks, and shows a one-line consent prompt before opening a browser for sign-in. Restart your assistants after install.
