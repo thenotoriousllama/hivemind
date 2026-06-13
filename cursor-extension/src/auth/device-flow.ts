@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { loadStoredCredentials, type StoredCredentials } from "./detector";
 import { credentialsPath, deeplakeConfigDir } from "../utils/paths";
 import { logSafe } from "../utils/output";
+import { assertSafeCredentialFields, openExternalUrl, sanitizeApiUrl } from "./safe-url";
 
 const DEFAULT_API_URL = "https://api.deeplake.ai";
 
@@ -21,23 +22,9 @@ interface DeviceTokenResponse {
   expires_in: number;
 }
 
-function openBrowser(url: string): boolean {
-  try {
-    if (process.platform === "darwin") {
-      execFileSync("open", [url], { stdio: "ignore", timeout: 5000 });
-    } else if (process.platform === "win32") {
-      execFileSync("cmd", ["/c", "start", "", url], { stdio: "ignore", timeout: 5000 });
-    } else {
-      execFileSync("xdg-open", [url], { stdio: "ignore", timeout: 5000 });
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function requestDeviceCode(apiUrl: string): Promise<DeviceCodeResponse> {
-  const resp = await fetch(`${apiUrl}/auth/device/code`, {
+  const base = sanitizeApiUrl(apiUrl, DEFAULT_API_URL);
+  const resp = await fetch(`${base}/auth/device/code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -46,7 +33,8 @@ async function requestDeviceCode(apiUrl: string): Promise<DeviceCodeResponse> {
 }
 
 async function pollForToken(deviceCode: string, apiUrl: string): Promise<DeviceTokenResponse | null> {
-  const resp = await fetch(`${apiUrl}/auth/device/token`, {
+  const base = sanitizeApiUrl(apiUrl, DEFAULT_API_URL);
+  const resp = await fetch(`${base}/auth/device/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ device_code: deviceCode }),
@@ -62,7 +50,8 @@ async function pollForToken(deviceCode: string, apiUrl: string): Promise<DeviceT
 }
 
 async function apiGet(path: string, token: string, apiUrl: string): Promise<unknown> {
-  const resp = await fetch(`${apiUrl}${path}`, {
+  const base = sanitizeApiUrl(apiUrl, DEFAULT_API_URL);
+  const resp = await fetch(`${base}${path}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -73,7 +62,8 @@ async function apiGet(path: string, token: string, apiUrl: string): Promise<unkn
 }
 
 async function apiPost(path: string, body: unknown, token: string, apiUrl: string): Promise<unknown> {
-  const resp = await fetch(`${apiUrl}${path}`, {
+  const base = sanitizeApiUrl(apiUrl, DEFAULT_API_URL);
+  const resp = await fetch(`${base}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -86,16 +76,17 @@ async function apiPost(path: string, body: unknown, token: string, apiUrl: strin
 }
 
 export async function saveCredentialsFromToken(token: string, apiUrl: string): Promise<StoredCredentials> {
-  const user = (await apiGet("/me", token, apiUrl)) as { id: string; name: string; email?: string };
+  const safeApiUrl = sanitizeApiUrl(apiUrl, DEFAULT_API_URL);
+  const user = (await apiGet("/me", token, safeApiUrl)) as { id: string; name: string; email?: string };
   const userName = user.name || (user.email ? user.email.split("@")[0] : "unknown");
-  const orgs = (await apiGet("/organizations", token, apiUrl)) as { id: string; name: string }[];
+  const orgs = (await apiGet("/organizations", token, safeApiUrl)) as { id: string; name: string }[];
   if (!Array.isArray(orgs) || orgs.length === 0) throw new Error("No organizations found for this account.");
   const org = orgs[0];
   const tokenData = (await apiPost(
     "/users/me/tokens",
     { name: `hivemind-extension-${Date.now()}`, duration: 365 * 24 * 3600, organization_id: org.id },
     token,
-    apiUrl,
+    safeApiUrl,
   )) as { token: { token: string } };
 
   const creds: StoredCredentials = {
@@ -103,9 +94,11 @@ export async function saveCredentialsFromToken(token: string, apiUrl: string): P
     orgId: org.id,
     orgName: org.name,
     userName,
-    apiUrl,
+    apiUrl: safeApiUrl,
     savedAt: new Date().toISOString(),
   };
+
+  assertSafeCredentialFields(creds);
 
   const { mkdirSync, writeFileSync } = await import("node:fs");
   mkdirSync(deeplakeConfigDir(), { recursive: true, mode: 0o700 });
@@ -114,14 +107,14 @@ export async function saveCredentialsFromToken(token: string, apiUrl: string): P
 }
 
 export async function loginBrowserFlow(): Promise<StoredCredentials> {
-  const apiUrl = process.env.HIVEMIND_API_URL ?? DEFAULT_API_URL;
+  const apiUrl = sanitizeApiUrl(process.env.HIVEMIND_API_URL, DEFAULT_API_URL);
   const code = await requestDeviceCode(apiUrl);
-  openBrowser(code.verification_uri_complete);
+  await openExternalUrl(code.verification_uri_complete);
   await vscode.window.showInformationMessage(
     `Complete sign-in in your browser. Code: ${code.user_code}`,
     "Open browser again",
-  ).then((choice) => {
-    if (choice === "Open browser again") openBrowser(code.verification_uri_complete);
+  ).then(async (choice) => {
+    if (choice === "Open browser again") await openExternalUrl(code.verification_uri_complete);
   });
 
   const interval = Math.max(code.interval || 5, 5) * 1000;
@@ -129,9 +122,9 @@ export async function loginBrowserFlow(): Promise<StoredCredentials> {
 
   return await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Waiting for Hivemind sign-in…", cancellable: true },
-    async (_progress, token) => {
+    async (_progress, cancelToken) => {
       while (Date.now() < deadline) {
-        if (token.isCancellationRequested) throw new Error("Login cancelled.");
+        if (cancelToken.isCancellationRequested) throw new Error("Login cancelled.");
         await new Promise((r) => setTimeout(r, interval));
         const result = await pollForToken(code.device_code, apiUrl);
         if (result) {

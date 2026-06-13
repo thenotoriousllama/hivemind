@@ -3,6 +3,7 @@ import type { AuthState } from "../types/health";
 import { credentialsPath } from "../utils/paths";
 import { readJson } from "../utils/fs-json";
 import { runHealthCheck } from "../health/checker";
+import { sanitizeApiUrl } from "./safe-url";
 
 export interface StoredCredentials {
   token: string;
@@ -25,7 +26,7 @@ export function isCredentialFilePresent(): boolean {
 }
 
 async function validateCredentialsOnline(creds: StoredCredentials): Promise<boolean> {
-  const apiUrl = creds.apiUrl ?? DEFAULT_API_URL;
+  const apiUrl = sanitizeApiUrl(creds.apiUrl, DEFAULT_API_URL);
   try {
     const resp = await fetch(`${apiUrl}/me`, {
       headers: {
