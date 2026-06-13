@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -42,17 +42,17 @@ describe("getInstalledVersion — plugin-manifest branch", () => {
   let root: string;
 
   beforeEach(() => {
-    root = join(tmpdir(), `hm-uvc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    root = mkdtempSync(join(tmpdir(), "hm-uvc-"));
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
   it("prefers <bundle>/../<manifestDir>/plugin.json when present", () => {
-    const bundle = join(root, "claude-code", "bundle");
-    mkdirSync(join(root, "claude-code", ".claude-plugin"), { recursive: true });
+    const bundle = join(root, "harnesses", "claude-code", "bundle");
+    mkdirSync(join(root, "harnesses", "claude-code", ".claude-plugin"), { recursive: true });
     mkdirSync(bundle, { recursive: true });
-    writeFileSync(join(root, "claude-code", ".claude-plugin", "plugin.json"),
+    writeFileSync(join(root, "harnesses", "claude-code", ".claude-plugin", "plugin.json"),
       JSON.stringify({ version: "1.2.3" }));
     writeFileSync(join(root, "package.json"),
       JSON.stringify({ name: "@deeplake/hivemind", version: "9.9.9" }));
@@ -72,7 +72,7 @@ describe("getInstalledVersion — plugin-manifest branch", () => {
 describe("getInstalledVersion — .hivemind_version stamp branch", () => {
   let root: string;
   beforeEach(() => {
-    root = join(tmpdir(), `hm-uvc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    root = mkdtempSync(join(tmpdir(), "hm-uvc-"));
   });
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 

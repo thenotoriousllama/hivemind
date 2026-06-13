@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as yaml from "js-yaml";
@@ -19,16 +19,16 @@ let tmpHome: string;
 let tmpPkg: string;
 
 beforeEach(() => {
-  tmpRoot = join(tmpdir(), `hm-hermes-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tmpRoot = mkdtempSync(join(tmpdir(), "hm-hermes-"));
   tmpHome = join(tmpRoot, "home");
   tmpPkg = join(tmpRoot, "pkg");
   mkdirSync(tmpHome, { recursive: true });
 
-  mkdirSync(join(tmpPkg, "hermes", "bundle"), { recursive: true });
-  writeFileSync(join(tmpPkg, "hermes", "bundle", "session-start.js"), "// fake bundle");
-  writeFileSync(join(tmpPkg, "hermes", "bundle", "capture.js"), "// fake bundle");
-  writeFileSync(join(tmpPkg, "hermes", "bundle", "pre-tool-use.js"), "// fake bundle");
-  writeFileSync(join(tmpPkg, "hermes", "bundle", "session-end.js"), "// fake bundle");
+  mkdirSync(join(tmpPkg, "harnesses", "hermes", "bundle"), { recursive: true });
+  writeFileSync(join(tmpPkg, "harnesses", "hermes", "bundle", "session-start.js"), "// fake bundle");
+  writeFileSync(join(tmpPkg, "harnesses", "hermes", "bundle", "capture.js"), "// fake bundle");
+  writeFileSync(join(tmpPkg, "harnesses", "hermes", "bundle", "pre-tool-use.js"), "// fake bundle");
+  writeFileSync(join(tmpPkg, "harnesses", "hermes", "bundle", "session-end.js"), "// fake bundle");
 
   mkdirSync(join(tmpPkg, "mcp", "bundle"), { recursive: true });
   writeFileSync(join(tmpPkg, "mcp", "bundle", "server.js"), "// fake mcp server");
@@ -136,7 +136,7 @@ describe("installHermes — cold install", () => {
   });
 
   it("throws when the hermes hook bundle source is missing (build hasn't run)", async () => {
-    rmSync(join(tmpPkg, "hermes", "bundle"), { recursive: true, force: true });
+    rmSync(join(tmpPkg, "harnesses", "hermes", "bundle"), { recursive: true, force: true });
     const { installHermes } = await importInstaller();
     expect(() => installHermes()).toThrow(/Hermes bundle missing/);
   });
