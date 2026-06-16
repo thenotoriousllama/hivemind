@@ -3,13 +3,13 @@ import { binNeedsShell } from "../utils/resolve-cli-bin.js";
 
 /** Fixed flags for the summary-generation `claude -p` call (no user input).
  *
- * `--allowedTools Write` constrains the headless agent to file writes only,
- * preventing a prompt-injection payload embedded in captured session content
- * from invoking Bash, Read, or any other tool. The summarizer only needs to
- * write the summary file, so Write is the minimal necessary permission.
- * bypassPermissions is still required for headless operation (no TTY to
- * present approval prompts). A follow-up (pr/06) will pivot to stdout so
- * bypassPermissions can be removed entirely.
+ * `--allowedTools Read Write` constrains the headless agent to reads and
+ * file writes only, preventing a prompt-injection payload embedded in
+ * captured session content from invoking Bash or any other tool. The
+ * summarizer needs Read to load the JSONL + existing summary, and Write to
+ * persist the output. bypassPermissions is still required for headless
+ * operation (no TTY to present approval prompts). A follow-up (pr/06) will
+ * pivot to stdout so bypassPermissions can be removed entirely.
  */
 const CLAUDE_FLAGS = [
   "--no-session-persistence",
@@ -18,7 +18,7 @@ const CLAUDE_FLAGS = [
   "--permission-mode",
   "bypassPermissions",
   "--allowedTools",
-  "Write",
+  "Read Write",
 ] as const;
 
 export interface ClaudeInvocation {
