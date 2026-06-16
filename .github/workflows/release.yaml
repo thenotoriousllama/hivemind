@@ -348,7 +348,7 @@ jobs:
         # `Package already exists as a code-plugin; family changes are not
         # allowed` (convex/packages.ts:4305). Pinning the family explicitly
         # matches what's already registered and lets the publish proceed.
-        run: clawhub package publish ./openclaw --family code-plugin
+        run: clawhub package publish ./harnesses/openclaw --family code-plugin
 
       - name: Summary
         run: |
