@@ -433,9 +433,16 @@ export function runHivemindCliAsync(
   timeoutMs = 300_000,
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    // Prepend "--" so that any user-controlled values in args cannot be
-    // misinterpreted as option flags by the hivemind CLI.
-    const child = spawn("hivemind", ["--", ...args], {
+    // spawn() runs without a shell, so each array element is passed as a
+    // distinct argv entry and cannot trigger shell injection. Do NOT prepend
+    // a "--" separator: the hivemind CLI reads its subcommand from argv[0]
+    // (see src/cli/index.ts `cmd = args[0]`) and has no leading-"--" handling,
+    // so "hivemind -- <subcommand> ..." is parsed as the command literally
+    // named "--" and exits with "Unknown command: --", breaking every
+    // CLI-backed dashboard action. Option-injection hardening for
+    // user-supplied positional values belongs in the CLI's per-subcommand
+    // argument parser, not in a separator this CLI ignores.
+    const child = spawn("hivemind", args, {
       cwd,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],

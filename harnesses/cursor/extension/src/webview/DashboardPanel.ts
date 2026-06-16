@@ -7,6 +7,7 @@ import { computeImpactOverlay } from "../graph/impact-overlay";
 import { openNodeInEditor, startEditorToGraphSync, type EditorGraphSyncHandle } from "../graph/editor-sync";
 import { loadGraphSnapshotFromEnvelope, parseGraphSnapshot } from "../graph/snapshot-loader";
 import type { GraphSnapshot } from "../graph/types";
+import type { SkillSyncState } from "../types/health";
 import { logError } from "../utils/output";
 import { getDashboardHtml } from "./html/dashboard-shell";
 import { loadDashboardData, loadGoalsList, loadRecentSessions, loadRulesList, loadSessionSummary, runHivemindCli, runHivemindCliAsync, invalidateOrgStatsCache } from "./data-bridge";
@@ -408,7 +409,15 @@ class DashboardController {
     const auth = await detectAuthState();
     const health = await runHealthCheck();
     const emb = await runHivemindCli(["embeddings", "status"], workspaceRoot());
-    const sync = syncSkillsToCursor(workspaceRoot());
+    // Honor HIVEMIND_AUTOPULL_DISABLED here too. syncSkillsToCursor() mutates
+    // the filesystem (creates symlinks + rewrites the pull manifest), so when
+    // the user has opted out of auto-sync, rendering the settings pane must
+    // not silently re-sync. Matches the guards in the poller and the
+    // "syncSkills" message handler.
+    const sync: SkillSyncState =
+      process.env.HIVEMIND_AUTOPULL_DISABLED === "1"
+        ? { lastSyncAt: undefined, results: [], syncedCount: 0, skippedCount: 0, erroredCount: 0 }
+        : syncSkillsToCursor(workspaceRoot());
     const healthSummary = health.dimensions.map((d) => `${d.label}: ${d.status}`).join(" · ");
     const graph = this.lastDashboardEnvelope?.graph;
     let graphStatus = "Not built for this repo.";
