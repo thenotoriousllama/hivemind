@@ -173,6 +173,8 @@ async function main(): Promise<void> {
       .replace(/__JSONL_SERVER_PATH__/g, jsonlServerPath);
 
     wlog(`running hermes -z (provider=${cfg.hermesProvider}, model=${cfg.hermesModel})`);
+    let execSucceeded = false;
+    const summaryBeforeExec = existsSync(tmpSummary) ? readFileSync(tmpSummary, "utf-8") : null;
     try {
       // hermes -z (--oneshot) is the non-interactive mode. --yolo
       // auto-approves tool use within the spawned hermes process.
@@ -194,6 +196,7 @@ async function main(): Promise<void> {
         timeout: 120_000,
         env: { ...process.env, HIVEMIND_WIKI_WORKER: "1", HIVEMIND_CAPTURE: "false" },
       });
+      execSucceeded = true;
       wlog("hermes -z exited (code 0)");
     } catch (e: any) {
       wlog(`hermes -z failed: ${e.status ?? e.message}`);
@@ -202,6 +205,19 @@ async function main(): Promise<void> {
     // 4. Upload summary to memory table
     if (existsSync(tmpSummary)) {
       const text = readFileSync(tmpSummary, "utf-8");
+      // A resumed session pre-seeds tmpSummary with the existing summary. If
+      // the agent run failed without rewriting it, re-uploading the unchanged
+      // summary and calling finalizeSummary advances the JSONL offset, marking
+      // new events as summarized when they never were. Skip the upload in that
+      // case; SessionEnd's later run reconstructs the delta from the offset in
+      // the summary body. Matches src/hooks/codex/wiki-worker.ts.
+      const summaryChanged = summaryBeforeExec === null
+        ? text.trim().length > 0
+        : text !== summaryBeforeExec;
+      if (!execSucceeded && !summaryChanged) {
+        wlog("hermes -z failed without producing a new summary; skipping upload");
+        return;
+      }
       if (text.trim()) {
         const fname = `${cfg.sessionId}.md`;
         const vpath = `/summaries/${cfg.userName}/${fname}`;

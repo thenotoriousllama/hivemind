@@ -213,6 +213,8 @@ async function main(): Promise<void> {
       .replace(/__JSONL_SERVER_PATH__/g, jsonlServerPath);
 
     wlog("running claude -p");
+    let execSucceeded = false;
+    const summaryBeforeExec = existsSync(tmpSummary) ? readFileSync(tmpSummary, "utf-8") : null;
     try {
       const inv = buildClaudeInvocation(cfg.claudeBin, prompt);
       execFileSync(inv.file, inv.args, {
@@ -220,6 +222,7 @@ async function main(): Promise<void> {
         timeout: 120_000,
         env: { ...process.env, HIVEMIND_WIKI_WORKER: "1", HIVEMIND_CAPTURE: "false" },
       });
+      execSucceeded = true;
       wlog("claude -p exited (code 0)");
     } catch (e: any) {
       wlog(`claude -p failed: ${e.status ?? e.message}`);
@@ -228,6 +231,20 @@ async function main(): Promise<void> {
     // 4. Upload summary to memory table
     if (existsSync(tmpSummary)) {
       const text = readFileSync(tmpSummary, "utf-8");
+      // A resumed session pre-seeds tmpSummary with the existing summary
+      // (step 2). If claude -p failed without rewriting it, re-uploading the
+      // unchanged summary and calling finalizeSummary advances the JSONL
+      // offset, marking new events as summarized when they never were. Skip
+      // the upload in that case; SessionEnd's later run reconstructs the
+      // delta from the offset embedded in the summary body. Matches the
+      // guard in src/hooks/codex/wiki-worker.ts.
+      const summaryChanged = summaryBeforeExec === null
+        ? text.trim().length > 0
+        : text !== summaryBeforeExec;
+      if (!execSucceeded && !summaryChanged) {
+        wlog("claude -p failed without producing a new summary; skipping upload");
+        return;
+      }
       if (text.trim()) {
         const fname = `${cfg.sessionId}.md`;
         const vpath = `/summaries/${cfg.userName}/${fname}`;
