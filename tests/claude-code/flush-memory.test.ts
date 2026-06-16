@@ -138,6 +138,24 @@ describe("runFlushMemory", () => {
     expect(embedCalls).toBe(1);
   });
 
+  it("falls back to recompute when the staged embedding file is malformed", async () => {
+    const embPath = join(dir, "bad.embedding.json");
+    writeFileSync(embPath, "not json{");
+    stage("bad", { embedded: true, embedding_path: embPath });
+    let embedCalls = 0;
+    await runFlushMemory(deps({ embed: async () => { embedCalls++; return [0.1]; } }));
+    expect(embedCalls).toBe(1); // loadEmbedding catch → null → recompute
+  });
+
+  it("falls back to recompute when the staged embedding is not an array", async () => {
+    const embPath = join(dir, "obj.embedding.json");
+    writeFileSync(embPath, '{"not":"an array"}');
+    stage("obj", { embedded: true, embedding_path: embPath });
+    let embedCalls = 0;
+    await runFlushMemory(deps({ embed: async () => { embedCalls++; return [0.2]; } }));
+    expect(embedCalls).toBe(1); // Array.isArray false → null → recompute
+  });
+
   it("reuses a staged embedding from disk instead of recomputing", async () => {
     const embPath = join(dir, "withemb.embedding.json");
     writeFileSync(embPath, JSON.stringify([0.5, 0.6]));
