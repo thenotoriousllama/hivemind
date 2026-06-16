@@ -18,6 +18,25 @@ import { createHash } from "node:crypto";
 
 const DEFAULT_API_URL = "https://api.deeplake.ai";
 
+/** Accepted API URL prefixes. Prevents a tampered credentials.json from
+ *  redirecting the bearer token to an attacker-controlled host. */
+const ALLOWED_API_ORIGINS = [
+  "https://api.deeplake.ai",
+  "https://app.activeloop.ai",
+];
+
+function sanitizeApiUrl(raw) {
+  if (typeof raw !== "string") return DEFAULT_API_URL;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:") return DEFAULT_API_URL;
+    if (ALLOWED_API_ORIGINS.some((o) => raw.startsWith(o))) return raw.replace(/\/+$/, "");
+  } catch {
+    // malformed URL
+  }
+  return DEFAULT_API_URL;
+}
+
 export function loadCreds() {
   try {
     const raw = readFileSync(join(homedir(), ".deeplake", "credentials.json"), "utf-8");
@@ -29,7 +48,7 @@ export function loadCreds() {
       orgName: creds.orgName ?? creds.orgId,
       userName: creds.userName ?? "",
       workspaceId: creds.workspaceId ?? "default",
-      apiUrl: creds.apiUrl ?? DEFAULT_API_URL,
+      apiUrl: sanitizeApiUrl(creds.apiUrl),
     };
   } catch {
     return null;

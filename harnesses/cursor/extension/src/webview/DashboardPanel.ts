@@ -551,12 +551,29 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ): void {
+    // Dispose the previous controller if the view is re-resolved (e.g. on
+    // Cursor restart) to prevent FileSystemWatcher and editor-listener leaks.
+    this.controller?.dispose();
+
     const disposables: vscode.Disposable[] = [];
-    this.context.subscriptions.push(...disposables);
     this.controller = new DashboardController(webviewView.webview, disposables, this.context.globalState);
-    webviewView.onDidChangeVisibility(() => {
+
+    // Route controller-owned disposables through context.subscriptions so
+    // VS Code cleans them up on extension deactivation.
+    this.context.subscriptions.push(...disposables);
+
+    const visibilityDisposable = webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) void this.controller?.refreshAll();
     });
+    this.context.subscriptions.push(visibilityDisposable);
+
+    // Dispose the controller when the webview panel is closed so watchers
+    // and listeners are released immediately rather than waiting for deactivate.
+    webviewView.onDidDispose(() => {
+      this.controller?.dispose();
+      this.controller = undefined;
+    });
+
     void this.controller.refreshAll();
   }
 }

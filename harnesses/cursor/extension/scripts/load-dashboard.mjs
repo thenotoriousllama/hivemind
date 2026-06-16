@@ -122,7 +122,7 @@ function writeStatsCache(scopeKey, data) {
  */
 async function fetchOrgStats(creds) {
   if (!creds?.token) return null;
-  const apiUrl = creds.apiUrl ?? "https://api.deeplake.ai";
+  const apiUrl = creds.apiUrl; // already sanitized by loadCreds()
   const scopeKey = statsScopeKey(creds);
   const { fresh, stale, fetchedAt } = readStatsCache(scopeKey);
   if (fresh) {

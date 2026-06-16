@@ -11,7 +11,9 @@ First-party VS Code / Cursor extension: health checks, login, hook wiring, dashb
 | **Dashboard webview** | KPIs, Hivemind settings, recent sessions, codebase graph, rules, skill sync |
 | **Skill bridge** | Symlinks from `~/.claude/skills/` into Cursor skill roots on workspace open |
 
-Hooks (capture, recall, skillify, graph, summaries) still run from `~/.cursor/hivemind/bundle/`. The extension provisions that bundle and merges `~/.cursor/hooks.json`; it does not replace the hook scripts.
+Hooks (capture, recall, skillify, graph, summaries) still run from `~/.cursor/hivemind/bundle/`. The extension merges `~/.cursor/hooks.json`; it does not replace the hook scripts.
+
+> **Note on bundle provisioning:** the extension can copy the bundle from the monorepo build (`harnesses/cursor/bundle/`) when developing from source. A standalone VSIX install does not ship the bundle; the CLI (`hivemind cursor install`) or **Hivemind: Wire Hooks** must supply it first. See Requirements below.
 
 ## Requirements
 

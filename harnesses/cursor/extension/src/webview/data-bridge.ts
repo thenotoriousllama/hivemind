@@ -433,7 +433,9 @@ export function runHivemindCliAsync(
   timeoutMs = 300_000,
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn("hivemind", args, {
+    // Prepend "--" so that any user-controlled values in args cannot be
+    // misinterpreted as option flags by the hivemind CLI.
+    const child = spawn("hivemind", ["--", ...args], {
       cwd,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
