@@ -68,11 +68,12 @@ describe("hermes spawn-wiki-worker source", () => {
   });
 
   it("writes the token config 0o600 inside a 0o700 tmp dir (C3 credential-exposure fix; fork must not drift)", () => {
-    // The config.json carries the Activeloop token in cleartext in the shared,
-    // predictable tmpdir. The base spawnWikiWorker is behaviorally verified in
-    // tests/claude-code/spawn-wiki-worker.test.ts; this source lock-in guards
-    // the hermes fork from silently dropping the mode bits on a future refactor.
-    expect(SPAWN_SRC).toMatch(/mkdirSync\(tmpDir,\s*\{\s*recursive:\s*true,\s*mode:\s*0o700\s*\}\)/);
+    // The config.json carries the Activeloop token in cleartext in the shared
+    // tmpdir. mkdtempSync creates an unpredictable directory atomically,
+    // chmodSync 0o700 locks it down. This source lock-in guards the hermes fork
+    // from silently dropping the security primitives on a future refactor.
+    expect(SPAWN_SRC).toMatch(/mkdtempSync\(join\(tmpdir\(\),\s*["']deeplake-wiki-["']\)\)/);
+    expect(SPAWN_SRC).toMatch(/chmodSync\(tmpDir,\s*0o700\)/);
     expect(SPAWN_SRC).toMatch(/\}\),\s*\{\s*mode:\s*0o600\s*\}\)/);
   });
 });
