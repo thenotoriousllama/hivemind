@@ -138,15 +138,20 @@ function deriveProjectKey(cwd: string): { key: string; project: string } {
   return { key, project };
 }
 
-function resolveSnapshot(repoDir: string): DashboardGraphSummary | null {
+export function resolveSnapshot(repoDir: string): DashboardGraphSummary | null {
   const snapshotsDir = join(repoDir, "snapshots");
   if (!existsSync(snapshotsDir)) return null;
   let snapshotPath: string | null = null;
   const pointer = join(repoDir, "latest-commit.txt");
   if (existsSync(pointer)) {
     const sha = readFileSync(pointer, "utf-8").trim();
-    const candidate = join(snapshotsDir, `${sha}.json`);
-    if (sha && existsSync(candidate)) snapshotPath = candidate;
+    // `latest-commit.txt` is on-disk data; validate it is a bare hex SHA
+    // before using it in a path so a tampered value like `../../etc/foo`
+    // cannot escape snapshots/. Mirrors the guard in scripts/load-dashboard.mjs.
+    if (/^[a-f0-9]{7,64}$/i.test(sha)) {
+      const candidate = join(snapshotsDir, `${sha}.json`);
+      if (existsSync(candidate)) snapshotPath = candidate;
+    }
   }
   if (!snapshotPath) {
     const candidates = readdirSync(snapshotsDir)
@@ -203,41 +208,60 @@ function loadDashboardDataFallback(cwd: string): DashboardDataEnvelope {
   };
 }
 
+/** Default hard timeout for a dashboard loader subprocess. A hung loader must
+ * not wedge the dashboard pane, so every spawn below is bounded. */
+const LOADER_TIMEOUT_MS = 60_000;
+
+/**
+ * Spawn a Node loader script, collect stdout, and enforce a hard timeout that
+ * SIGTERMs a hung child (mirrors the kill-timer in runHivemindCliAsync). The
+ * promise always settles: on close, on spawn error, or on timeout. Callers
+ * decide their own fallback from `{ ok, stdout }`.
+ */
+function spawnLoaderScript(
+  argv: string[],
+  cwd: string,
+  timeoutMs = LOADER_TIMEOUT_MS,
+): Promise<{ ok: boolean; stdout: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, argv, {
+      cwd,
+      env: { ...process.env, NODE_OPTIONS: "" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok, stdout });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(false);
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.on("close", (code) => finish(code === 0));
+    child.on("error", () => finish(false));
+  });
+}
+
 /** Load dashboard envelope via the canonical CLI data layer (`src/dashboard/data.ts`). */
 export async function loadDashboardData(cwd: string): Promise<DashboardDataEnvelope> {
   const scriptPath = loadDashboardScriptPath();
   if (!existsSync(scriptPath)) {
     return loadDashboardDataFallback(cwd);
   }
-
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, cwd], {
-      cwd: repoRootFromExtension(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on("close", (code) => {
-      if (code !== 0 || !stdout.trim()) {
-        resolve(loadDashboardDataFallback(cwd));
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout) as DashboardDataEnvelope;
-        resolve(parsed);
-      } catch {
-        resolve(loadDashboardDataFallback(cwd));
-      }
-    });
-    child.on("error", () => resolve(loadDashboardDataFallback(cwd)));
-  });
+  const { ok, stdout } = await spawnLoaderScript([scriptPath, cwd], repoRootFromExtension());
+  if (!ok || !stdout.trim()) return loadDashboardDataFallback(cwd);
+  try {
+    return JSON.parse(stdout) as DashboardDataEnvelope;
+  } catch {
+    return loadDashboardDataFallback(cwd);
+  }
 }
 
 export function invalidateOrgStatsCache(): void {
@@ -251,28 +275,13 @@ export function invalidateOrgStatsCache(): void {
 
 export async function loadRecentSessions(_cwd: string): Promise<RecentSession[]> {
   const scriptPath = join(__dirname, "..", "scripts", "load-sessions.mjs");
-  if (existsSync(scriptPath)) {
-    return new Promise((resolve) => {
-      const child = spawn(process.execPath, [scriptPath, _cwd], {
-        cwd: repoRootFromExtension(),
-        env: { ...process.env, NODE_OPTIONS: "" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.on("close", () => {
-        try {
-          resolve(JSON.parse(stdout) as RecentSession[]);
-        } catch {
-          resolve(loadRecentSessionsFallback(_cwd));
-        }
-      });
-      child.on("error", () => resolve(loadRecentSessionsFallback(_cwd)));
-    });
+  if (!existsSync(scriptPath)) return loadRecentSessionsFallback(_cwd);
+  const { stdout } = await spawnLoaderScript([scriptPath, _cwd], repoRootFromExtension());
+  try {
+    return JSON.parse(stdout) as RecentSession[];
+  } catch {
+    return loadRecentSessionsFallback(_cwd);
   }
-  return loadRecentSessionsFallback(_cwd);
 }
 
 function loadRecentSessionsFallback(_cwd: string): RecentSession[] {
@@ -299,25 +308,13 @@ export async function loadRulesList(status: string, limit = 10): Promise<RulesLi
   if (!existsSync(scriptPath)) {
     return { loggedOut: true, rules: [], message: "Rules loader unavailable." };
   }
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, status, String(limit)], {
-      cwd: repoRootFromExtension(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.on("close", () => {
-      try {
-        resolve(JSON.parse(stdout) as RulesListResult);
-      } catch {
-        resolve({ loggedOut: true, rules: [], message: "Failed to parse rules." });
-      }
-    });
-    child.on("error", () => resolve({ loggedOut: true, rules: [], message: "Failed to load rules." }));
-  });
+  const { ok, stdout } = await spawnLoaderScript([scriptPath, status, String(limit)], repoRootFromExtension());
+  if (!ok) return { loggedOut: true, rules: [], message: "Failed to load rules." };
+  try {
+    return JSON.parse(stdout) as RulesListResult;
+  } catch {
+    return { loggedOut: true, rules: [], message: "Failed to parse rules." };
+  }
 }
 
 export async function loadGoalsList(filter: "mine" | "all" = "mine"): Promise<GoalsListResult> {
@@ -325,25 +322,13 @@ export async function loadGoalsList(filter: "mine" | "all" = "mine"): Promise<Go
   if (!existsSync(scriptPath)) {
     return { loggedOut: true, goals: [], message: "Goals loader unavailable." };
   }
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, filter], {
-      cwd: repoRootFromExtension(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.on("close", () => {
-      try {
-        resolve(JSON.parse(stdout) as GoalsListResult);
-      } catch {
-        resolve({ loggedOut: false, goals: [], message: "Failed to parse goals." });
-      }
-    });
-    child.on("error", () => resolve({ loggedOut: false, goals: [], message: "Failed to load goals." }));
-  });
+  const { ok, stdout } = await spawnLoaderScript([scriptPath, filter], repoRootFromExtension());
+  if (!ok) return { loggedOut: false, goals: [], message: "Failed to load goals." };
+  try {
+    return JSON.parse(stdout) as GoalsListResult;
+  } catch {
+    return { loggedOut: false, goals: [], message: "Failed to parse goals." };
+  }
 }
 
 /** Load session summary from remote memory table with local disk fallback. */
@@ -374,53 +359,41 @@ export async function loadSessionSummary(sessionId: string, cwd: string): Promis
     };
   }
 
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, sessionId, userName], {
-      cwd: repoRootFromExtension(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.on("close", () => {
-      try {
-        const parsed = JSON.parse(stdout) as {
-          text?: string | null;
-          source?: SessionSummaryResult["source"];
-          message?: string | null;
-        };
-        const degradedHint =
-          parsed.source === "unreachable"
-            ? parsed.message ?? "Memory table unreachable."
-            : parsed.source === "missing"
-              ? "If cursor-agent is missing or logged out, summaries fail silently until PRD-002 health checks pass."
-              : null;
-        resolve({
-          text: parsed.text ?? null,
-          source: parsed.source ?? "missing",
-          message: parsed.message ?? null,
-          degradedHint,
-        });
-      } catch {
-        resolve({
-          text: null,
-          source: "missing",
-          message: `No summary found for session ${sessionId}.`,
-          degradedHint: null,
-        });
-      }
-    });
-    child.on("error", () =>
-      resolve({
-        text: null,
-        source: "unreachable",
-        message: "Could not load session summary.",
-        degradedHint: "Summary loader failed to start.",
-      }),
-    );
-  });
+  const { ok, stdout } = await spawnLoaderScript([scriptPath, sessionId, userName], repoRootFromExtension());
+  if (!ok) {
+    return {
+      text: null,
+      source: "unreachable",
+      message: "Could not load session summary.",
+      degradedHint: "Summary loader failed to start or timed out.",
+    };
+  }
+  try {
+    const parsed = JSON.parse(stdout) as {
+      text?: string | null;
+      source?: SessionSummaryResult["source"];
+      message?: string | null;
+    };
+    const degradedHint =
+      parsed.source === "unreachable"
+        ? parsed.message ?? "Memory table unreachable."
+        : parsed.source === "missing"
+          ? "If cursor-agent is missing or logged out, summaries fail silently until PRD-002 health checks pass."
+          : null;
+    return {
+      text: parsed.text ?? null,
+      source: parsed.source ?? "missing",
+      message: parsed.message ?? null,
+      degradedHint,
+    };
+  } catch {
+    return {
+      text: null,
+      source: "missing",
+      message: `No summary found for session ${sessionId}.`,
+      degradedHint: null,
+    };
+  }
 }
 
 export async function runHivemindCli(args: string[], cwd: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {

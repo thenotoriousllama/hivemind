@@ -12,7 +12,7 @@ import {
 import { readJson } from "../utils/fs-json";
 
 const HIVEMIND_MARKER_KEY = "_hivemindManaged";
-const DOCS_URL = "https://github.com/thenotoriousllama/hivemind#quick-start";
+const DOCS_URL = "https://github.com/activeloopai/hivemind#quick-start";
 
 interface CursorHookEntry {
   type: "command" | "prompt";

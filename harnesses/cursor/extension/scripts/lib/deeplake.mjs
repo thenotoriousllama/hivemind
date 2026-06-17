@@ -25,7 +25,7 @@ const ALLOWED_API_ORIGINS = [
   "https://app.activeloop.ai",
 ];
 
-function sanitizeApiUrl(raw) {
+export function sanitizeApiUrl(raw) {
   if (typeof raw !== "string") return DEFAULT_API_URL;
   try {
     const url = new URL(raw);

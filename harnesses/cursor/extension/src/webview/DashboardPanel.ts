@@ -105,6 +105,15 @@ class DashboardController {
     this.editorSync?.dispose();
     if (this.impactDebounce) clearTimeout(this.impactDebounce);
     this.impactWatcher?.dispose();
+    // Tear down everything pushed into this.disposables — most importantly the
+    // webview.onDidReceiveMessage handler registered in the constructor.
+    // Without this, a sidebar re-resolve (Cursor restart) builds a new
+    // controller while the old message handler stays live, double-handling
+    // every inbound webview message. Emptying the array also makes the
+    // DashboardPanel owner's own teardown loop a safe no-op.
+    while (this.disposables.length) {
+      this.disposables.pop()?.dispose();
+    }
   }
 
   async refreshAll(): Promise<void> {
@@ -564,17 +573,21 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
     // Cursor restart) to prevent FileSystemWatcher and editor-listener leaks.
     this.controller?.dispose();
 
+    // The controller OWNS this array and disposes it in controller.dispose().
+    // Do NOT also push it into context.subscriptions: that kept the previous
+    // controller's onDidReceiveMessage handler alive across a re-resolve
+    // (cleaned only at deactivate), double-handling webview messages. The
+    // re-resolve dispose() above and the onDidDispose below both release it.
     const disposables: vscode.Disposable[] = [];
     this.controller = new DashboardController(webviewView.webview, disposables, this.context.globalState);
 
-    // Route controller-owned disposables through context.subscriptions so
-    // VS Code cleans them up on extension deactivation.
-    this.context.subscriptions.push(...disposables);
-
-    const visibilityDisposable = webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) void this.controller?.refreshAll();
-    });
-    this.context.subscriptions.push(visibilityDisposable);
+    // Visibility listener is controller-scoped too, so it tears down with the
+    // controller on the next re-resolve instead of accumulating.
+    disposables.push(
+      webviewView.onDidChangeVisibility(() => {
+        if (webviewView.visible) void this.controller?.refreshAll();
+      }),
+    );
 
     // Dispose the controller when the webview panel is closed so watchers
     // and listeners are released immediately rather than waiting for deactivate.
