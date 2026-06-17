@@ -125,18 +125,29 @@ export async function pollForToken(deviceCode: string, apiUrl = DEFAULT_API_URL)
 }
 
 function openBrowser(url: string): boolean {
+  // The URL is server-derived (device-flow `verification_uri_complete`), so
+  // treat it as untrusted: only ever hand a parsed, https-scheme URL to an OS
+  // opener. Anything else (other schemes, malformed) is refused outright.
+  let safeUrl: string;
   try {
-    // Fixed-argv spawn (no shell) so a crafted OAuth verification URL can't
-    // smuggle shell metacharacters into the command line. `stdio: "ignore"`
-    // subsumes the old `2>/dev/null` stderr suppression on every platform.
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    safeUrl = parsed.href;
+  } catch {
+    return false;
+  }
+  try {
+    // Fixed-argv spawn, never a shell. On Windows we use rundll32's
+    // FileProtocolHandler rather than `cmd /c start`: cmd re-parses its own
+    // command line (`&`, `^`, `|`), which would reintroduce an injection sink
+    // even with fixed argv. rundll32 is execFile'd directly with no
+    // interpreter, so the validated URL is passed as an opaque argument.
     if (process.platform === "darwin") {
-      execFileSync("open", [url], { stdio: "ignore", timeout: 5000 });
+      execFileSync("open", [safeUrl], { stdio: "ignore", timeout: 5000 });
     } else if (process.platform === "win32") {
-      // `start` is a cmd builtin; the empty "" is the required window-title
-      // arg so a quoted URL isn't misread as the title.
-      execFileSync("cmd", ["/c", "start", "", url], { stdio: "ignore", timeout: 5000 });
+      execFileSync("rundll32", ["url.dll,FileProtocolHandler", safeUrl], { stdio: "ignore", timeout: 5000 });
     } else {
-      execFileSync("xdg-open", [url], { stdio: "ignore", timeout: 5000 });
+      execFileSync("xdg-open", [safeUrl], { stdio: "ignore", timeout: 5000 });
     }
     return true;
   } catch {
