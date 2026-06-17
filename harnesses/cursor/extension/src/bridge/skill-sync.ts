@@ -180,7 +180,18 @@ function loadManifest(): PulledManifest {
 function writeManifest(manifest: PulledManifest): void {
   const path = manifestPath();
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  // Atomic write: serialize to a sibling temp file, then rename over the
+  // target (atomic on the same filesystem). A crash mid-write or a concurrent
+  // reader never observes a half-written manifest — which loadManifest would
+  // silently reset to an empty manifest, dropping all recorded pull state.
+  const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    renameSync(tmp, path);
+  } catch (err) {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+    throw err;
+  }
 }
 
 function mergeSymlinksIntoManifest(

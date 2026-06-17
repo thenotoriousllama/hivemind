@@ -20,9 +20,6 @@ module.exports = {
   },
   resolve: {
     extensions: [".ts", ".js"],
-    alias: {
-      "@hivemind": path.resolve(__dirname, "../../../..", "src"),
-    },
   },
   module: {
     rules: [

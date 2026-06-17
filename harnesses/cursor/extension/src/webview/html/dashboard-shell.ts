@@ -609,7 +609,7 @@ export function getDashboardHtml(webview: vscode.Webview, extensionUri: vscode.U
     const links = rawLinks.map(l => ({ source: l.source, target: l.target, relation: l.relation }));
     graphUi.nodes = nodes;
     graphUi.links = links;
-    graphUi.snapshotKey = String(total) + ":" + nodes.length;
+    graphUi.snapshotKey = snapshotCacheKey();
 
     svg.append("defs").append("marker")
       .attr("id", "arrow").attr("viewBox", "0 -5 10 10")
@@ -718,9 +718,18 @@ export function getDashboardHtml(webview: vscode.Webview, extensionUri: vscode.U
     }
   }
 
+  function snapshotCacheKey() {
+    if (!state.graph || !Array.isArray(state.graph.nodes)) return "";
+    const fs = filteredSnapshot(state.graph);
+    const commit = (state.graphMeta && state.graphMeta.commitSha) || "";
+    // Include edge count + commit sha (not just node count): an edge-only
+    // change keeps the node count identical, and the old startsWith(nodeCount)
+    // check would skip the rebuild and leave stale edges on screen.
+    return commit + ":" + fs.total + ":" + fs.nodes.length + ":" + fs.links.length;
+  }
+
   function renderGraph() {
-    const key = state.graph ? JSON.stringify(state.graph).length : "";
-    if (graphUi.snapshotKey && graphUi.snapshotKey.startsWith(String((state.graph && state.graph.nodes || []).length))) {
+    if (graphUi.snapshotKey && graphUi.snapshotKey === snapshotCacheKey()) {
       updateGraphStyles();
       return;
     }

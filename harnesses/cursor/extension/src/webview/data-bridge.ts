@@ -212,6 +212,10 @@ function loadDashboardDataFallback(cwd: string): DashboardDataEnvelope {
  * not wedge the dashboard pane, so every spawn below is bounded. */
 const LOADER_TIMEOUT_MS = 60_000;
 
+/** Grace window after a SIGTERM before escalating to SIGKILL, for a child that
+ * ignores graceful termination (e.g. stuck in uninterruptible I/O). */
+const KILL_GRACE_MS = 3_000;
+
 /**
  * Spawn a Node loader script, collect stdout, and enforce a hard timeout that
  * SIGTERMs a hung child (mirrors the kill-timer in runHivemindCliAsync). The
@@ -231,21 +235,31 @@ function spawnLoaderScript(
     });
     let stdout = "";
     let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = (): void => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
     const finish = (ok: boolean): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       resolve({ ok, stdout });
     };
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
+      // Escalate to SIGKILL if the child ignores SIGTERM within the grace
+      // window. The promise has already settled (false); this only reaps a
+      // wedged process so it can't linger.
+      killTimer = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      }, KILL_GRACE_MS);
       finish(false);
     }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
-    child.on("close", (code) => finish(code === 0));
-    child.on("error", () => finish(false));
+    child.on("close", (code) => { clearTimers(); finish(code === 0); });
+    child.on("error", () => { clearTimers(); finish(false); });
   });
 }
 
@@ -422,8 +436,17 @@ export function runHivemindCliAsync(
     });
     let stdout = "";
     let stderr = "";
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = (): void => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
+      // Escalate to SIGKILL if SIGTERM is ignored within the grace window.
+      killTimer = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      }, KILL_GRACE_MS);
     }, timeoutMs);
     child.stdout.on("data", (c: Buffer) => {
       stdout += c.toString();
@@ -432,11 +455,11 @@ export function runHivemindCliAsync(
       stderr += c.toString();
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      clearTimers();
       resolve({ ok: code === 0, stdout, stderr });
     });
     child.on("error", (err) => {
-      clearTimeout(timer);
+      clearTimers();
       resolve({ ok: false, stdout, stderr: err.message });
     });
   });
